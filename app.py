@@ -62,7 +62,12 @@ def load_scada(file):
     df[power_col] = pd.to_numeric(df[power_col],errors="coerce")
 
     df = df.dropna(subset=[wind_col,power_col,time_col])
-    df["Name"] = df["Name"].astype(str).str.strip()
+
+    # SAFE NAME HANDLING
+    if "Name" not in df.columns:
+        df["Name"] = "Turbine_1"
+    else:
+        df["Name"] = df["Name"].astype(str).str.strip()
 
     return df,wind_col,power_col,time_col
 
@@ -160,7 +165,8 @@ def process_turbine(turbine):
         (df_t[power_col]>0)
     ]
 
-    if len(df_t)<30:
+    # FIXED (reduced threshold)
+    if len(df_t)<10:
         return None
 
     df_t["WindBin"] = (df_t[wind_col]/BIN_SIZE).round()*BIN_SIZE
@@ -188,3 +194,5 @@ def process_turbine(turbine):
     avg_dev = merged["Deviation_%"].mean(skipna=True)
 
     return df_t,merged,avg_dev
+
+# (rest of your code SAME — no change)
