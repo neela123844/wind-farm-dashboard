@@ -22,7 +22,6 @@ BIN_SIZE = 0.5
 TOLERANCE = 2.0
 RATED_SPEED = 10.0
 RATED_POWER = 3400.0
-AIR_DENSITY_SITE = 1.15
 
 # SIDEBAR
 uploaded_file = st.sidebar.file_uploader("Upload SCADA CSV", type=["csv"])
@@ -70,7 +69,7 @@ else:
 
 df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
 
-# LOAD REFERENCE (FIXED)
+# LOAD REFERENCE
 @st.cache_data
 def load_reference(site):
     ref_raw = pd.read_excel(REF_FILE, header=None)
@@ -95,7 +94,6 @@ def load_reference(site):
 
     ref["WindSpeed"] = pd.to_numeric(ref["WindSpeed"],errors="coerce")
     ref["RefPower"] = pd.to_numeric(ref["RefPower"],errors="coerce")
-
     ref = ref.dropna().sort_values("WindSpeed")
 
     wind_bins = np.arange(3,25.5,BIN_SIZE)
@@ -146,21 +144,35 @@ results_df = pd.DataFrame(results)
 # STATUS
 def get_status(dev):
     if dev < -2:
-        return "🔴 Under"
+        return " Under"
     elif dev > 2:
-        return "🟡 Over"
+        return " Over"
     else:
-        return "🟢 Normal"
+        return " Normal"
 
 results_df["Status"] = results_df["Deviation_%"].apply(get_status)
 
-# KPI
+# HEADER
 st.subheader(f"{site} Performance ({start_date.date()} → {end_date.date()})")
 
-# BAR GRAPH
+# BAR GRAPH WITH COLOR
 st.subheader("Deviation Overview")
+
+colors = []
+for d in results_df["Deviation_%"]:
+    if d < -2:
+        colors.append("red")
+    elif d > 2:
+        colors.append("orange")
+    else:
+        colors.append("green")
+
 fig_bar = go.Figure()
-fig_bar.add_trace(go.Bar(x=results_df["Turbine"], y=results_df["Deviation_%"]))
+fig_bar.add_trace(go.Bar(
+    x=results_df["Turbine"],
+    y=results_df["Deviation_%"],
+    marker_color=colors
+))
 st.plotly_chart(fig_bar, use_container_width=True)
 
 # MODE
@@ -177,7 +189,6 @@ if mode=="Single":
     fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],mode='lines',name="Reference"))
     st.plotly_chart(fig,use_container_width=True)
 
-    # Deviation graph
     st.subheader("Deviation vs Wind Speed")
     fig2 = go.Figure()
     fig2.add_trace(go.Scatter(x=merged["WindBin"],y=merged["Deviation_%"],mode='lines+markers'))
@@ -189,14 +200,31 @@ elif mode=="Compare":
     t1 = st.selectbox("T1", results_df["Turbine"])
     t2 = st.selectbox("T2", results_df["Turbine"], index=1)
 
-    _,m1,_ = process_turbine(t1)
-    _,m2,_ = process_turbine(t2)
+    df1,m1,dev1 = process_turbine(t1)
+    df2,m2,dev2 = process_turbine(t2)
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=m1["WindBin"],y=m1["AvgPower"],name=t1))
     fig.add_trace(go.Scatter(x=m2["WindBin"],y=m2["AvgPower"],name=t2))
     fig.add_trace(go.Scatter(x=m1["WindBin"],y=m1["RefPower"],name="Reference",line=dict(dash='dash')))
     st.plotly_chart(fig,use_container_width=True)
+
+    better = t1 if dev1 > dev2 else t2
+    worse = t2 if better == t1 else t1
+
+    stall1 = m1[(m1["Deviation_%"] < -15) & (m1["WindBin"] < RATED_SPEED)]["WindBin"].tolist()
+    stall2 = m2[(m2["Deviation_%"] < -15) & (m2["WindBin"] < RATED_SPEED)]["WindBin"].tolist()
+
+    st.subheader("Comparison Insight")
+    st.write(f" {better} performs better than {worse}")
+
+    st.write(f"{t1} → Dev: {round(dev1,2)}%")
+    if stall1:
+        st.write(f" Stalling at: {stall1}")
+
+    st.write(f"{t2} → Dev: {round(dev2,2)}%")
+    if stall2:
+        st.write(f" Stalling at: {stall2}")
 
 # ALL
 else:
@@ -213,24 +241,29 @@ else:
         fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],
                                  mode='lines',line=dict(dash='dash')))
 
-        # COMMENT
+        stall = merged[(merged["Deviation_%"] < -15) & (merged["WindBin"] < RATED_SPEED)]["WindBin"].tolist()
+
         if avg_dev < -2:
-            comment = "Low output (air density / stalling)"
+            comment = "Underperformance\n- Low air density\n- Stalling\n- Blade issue"
             color = "red"
         elif avg_dev > 2:
-            comment = "Higher than expected"
+            comment = "Overperformance\n- Wind variation\n- Sensor issue"
             color = "orange"
         else:
             comment = "Normal performance"
             color = "green"
 
+        if stall:
+            comment += f"\n Stalling at: {stall}"
+
         fig.update_layout(
-            title=f"{t} | Dev {round(avg_dev,1)}% | {comment}",
+            title=f"{t} | Dev: {round(avg_dev,1)}%",
             title_font=dict(color=color),
             height=350
         )
 
         cols[i%2].plotly_chart(fig,use_container_width=True)
+        cols[i%2].markdown(f"```\n{comment}\n```")
         i+=1
 
 # TABLE
