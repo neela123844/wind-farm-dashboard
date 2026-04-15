@@ -10,13 +10,15 @@ st.set_page_config(layout="wide")
 
 # LOGO
 logo_path = os.path.join(os.path.dirname(__file__), "Envision.png")
-col1, col2, col3 = st.columns([1,2,1])
-with col2:
-    st.image(logo_path, width=300)
+if os.path.exists(logo_path):
+    col1, col2, col3 = st.columns([1,2,1])
+    with col2:
+        st.image(logo_path, width=300)
 
 st.title("Wind Farm Performance Analytics Dashboard")
 
-REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
+REF_FILE = os.path.join(os.path.dirname(__file__),
+                       "India site Standard & Theoretical PC data 1234.xlsx")
 
 BIN_SIZE = 0.5
 TOLERANCE = 2.0
@@ -29,16 +31,12 @@ if uploaded_file is None:
     st.warning("Please upload SCADA file")
     st.stop()
 
-# SITE SELECTOR
 site = st.sidebar.selectbox(
     "Select Site for Reference Curve",
-    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki","CleanMax Motadevaliya",
-     "Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar","FP_Kudligi","Sprng TN","Otha Pithalpur-GJ",
-     "AMGEPL,Kurnool AP","ReNew1_Gadag","partner Ottapidaum","Cleanmax Motadevaliya","Cleanmax SANATHALI","Cleanmax Babra",
-     "RenfraEnergy Trichy","RENEW-03 Sholapur","Renew2 Chandwad","ReNew-4 Patoda","Clean max Jagalur","Sembcorp Tuticorin",
-     "Renew-4 Kudligi","Renew Otha","Cleanmax Honavad"," Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
+    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki",
+     "CleanMax Motadevaliya","Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar",
+     "FP_Kudligi","Sprng TN","Otha Pithalpur-GJ","AMGEPL,Kurnool AP","ReNew1_Gadag"]
 )
-
 
 # ---------------- LOAD SCADA ----------------
 @st.cache_data
@@ -80,7 +78,11 @@ df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
 # ---------------- REFERENCE ----------------
 @st.cache_data
 def load_reference(site):
-    ref_raw = pd.read_excel(REF_FILE, header=None)
+    try:
+        ref_raw = pd.read_excel(REF_FILE, header=None)
+    except:
+        st.error("Reference file not found. Upload Excel to GitHub.")
+        st.stop()
 
     location=None
     for r in range(ref_raw.shape[0]):
@@ -92,7 +94,7 @@ def load_reference(site):
             break
 
     if location is None:
-        st.error("Site not found")
+        st.error("Site not found in reference file")
         st.stop()
 
     r,c = location
@@ -122,7 +124,6 @@ def process_turbine(t):
 
     expected_points = ((end_date - start_date).total_seconds() / 600)
     availability = (len(df_t) / expected_points) * 100
-
     std_dev = df_t[power_col].std()
 
     df_t["WindBin"] = (df_t[wind_col]/BIN_SIZE).round()*BIN_SIZE
@@ -137,26 +138,30 @@ def process_turbine(t):
     merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
     avg_dev = merged["Deviation_%"].mean(skipna=True)
 
-    # Stall
+    # STALL LOGIC
     stall_df = merged[
         (merged["WindBin"]>=4)&(merged["WindBin"]<=10)&
         (merged["Deviation_%"]<=-40)&(merged["Deviation_%"]>=-72)
     ]
     stall_bins = stall_df["WindBin"].tolist()
-    stall_flag = (len(stall_bins)>=3) and (availability>=99) and (std_dev<1)
 
-    # Derating
+    high_availability = availability >= 99
+    low_std = std_dev < 1
+
+    stall_flag = (len(stall_bins)>=3) and high_availability and low_std
+
+    # DERATING
     derating_flag = False
     for col in status_cols:
         if df_t[col].astype(str).str.contains("derat|limit|curtail|temp", case=False, na=False).any():
             derating_flag = True
 
-    # Measurement
+    # MEASUREMENT
     measurement_flag = len(df_t[(df_t[wind_col]<4)&(df_t[power_col]>0.2*RATED_POWER)]) > 10
 
     high_perf_flag = avg_dev > 8
 
-    return df_t, merged, avg_dev, stall_flag, availability, std_dev, derating_flag, measurement_flag, high_perf_flag
+    return df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, measurement_flag, high_perf_flag
 
 # ---------------- SUMMARY ----------------
 results=[]
@@ -165,34 +170,42 @@ remarks=[]
 for t in df["Name"].unique():
     res = process_turbine(t)
     if res:
-        df_t, merged, avg_dev, stall_flag, availability, std_dev, derating_flag, measurement_flag, high_perf_flag = res
+        df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, measurement_flag, high_perf_flag = res
 
-        results.append({"Turbine":t,"Deviation_%":avg_dev})
+        # COMMENT ENGINE
+        comment = ""
 
-        comment=""
         if stall_flag:
-            comment+="🔴 STALL\n"
+            comment += "🔴 STALL DETECTED\n"
+            comment += f"- Wind: 4–10 m/s\n- Bins: {stall_bins}\n"
+            comment += "- Deviation: -40% to -72%\n"
+            comment += "- Stable low output (std <1)\n"
+
         elif avg_dev < -2:
-            comment+="🔴 UNDER\n"
-        elif avg_dev > 8:
-            comment+="🟠 OVER\n"
-        else:
-            comment+="🟢 NORMAL\n"
+            comment += "🔴 UNDERPERFORMANCE\n"
+
+        if avg_dev > 8:
+            comment += "\n🟠 HIGH OVERPERFORMANCE\n"
+            comment += "Possible: Sensor / IPC / NTF\n"
+
+        elif avg_dev > 2:
+            comment += "\n🟠 SLIGHT OVERPERFORMANCE\n"
+
+        if -TOLERANCE <= avg_dev <= TOLERANCE:
+            comment += "\n🟢 NORMAL\n"
 
         if derating_flag:
-            comment+="Derating active\n"
+            comment += "\n⚠️ DERATING ACTIVE (Temp / Curtailment)\n"
+
         if measurement_flag:
-            comment+="Measurement issue\n"
-        if high_perf_flag:
-            comment+="High overperformance\n"
+            comment += "\n⚠️ MEASUREMENT ISSUE (Low wind power)\n"
 
-        comment+=f"\nAvailability: {round(availability,1)}%"
-        comment+=f"\nStd Dev: {round(std_dev,2)}"
+        comment += f"\nAvailability: {round(availability,1)}%"
+        comment += f"\nStd Dev: {round(std_dev,2)}"
 
-        remarks.append(comment)
+        results.append({"Turbine":t,"Deviation_%":avg_dev,"Remarks":comment})
 
 results_df = pd.DataFrame(results)
-results_df["Remarks"] = remarks
 
 # ---------------- BAR ----------------
 colors = ["red" if d < -2 else "orange" if d > 2 else "green" for d in results_df["Deviation_%"]]
@@ -216,14 +229,11 @@ for t in results_df["Turbine"]:
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_t[wind_col], y=df_t[power_col],
-                             mode='markers', marker=dict(size=3, opacity=0.4),
-                             name="Raw"))
-
+                             mode='markers', marker=dict(size=3, opacity=0.4)))
     fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["AvgPower"],
-                             mode='lines+markers', name="Actual"))
-
+                             mode='lines+markers'))
     fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["RefPower"],
-                             mode='lines', line=dict(dash='dash'), name="Reference"))
+                             mode='lines', line=dict(dash='dash')))
 
     fig.update_layout(title=f"{t} | Dev: {round(avg_dev,1)}%", height=350)
 
