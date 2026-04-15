@@ -32,10 +32,9 @@ if uploaded_file is None:
     st.stop()
 
 site = st.sidebar.selectbox(
-    "Select Site for Reference Curve",
-    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki",
-     "CleanMax Motadevaliya","Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar",
-     "FP_Kudligi","Sprng TN","Otha Pithalpur-GJ","AMGEPL,Kurnool AP","ReNew1_Gadag"]
+    "Select Site",
+    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2",
+     "AMP_Energy","Wanki","CleanMax Motadevaliya","Ayana Amerli"]
 )
 
 # ---------------- LOAD SCADA ----------------
@@ -81,7 +80,7 @@ def load_reference(site):
     try:
         ref_raw = pd.read_excel(REF_FILE, header=None)
     except:
-        st.error("Reference file not found. Upload Excel to GitHub.")
+        st.error("Reference Excel file not found. Upload it to GitHub.")
         st.stop()
 
     location=None
@@ -164,46 +163,63 @@ def process_turbine(t):
     return df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, measurement_flag, high_perf_flag
 
 # ---------------- SUMMARY ----------------
-results=[]
-remarks=[]
+results = []
 
 for t in df["Name"].unique():
     res = process_turbine(t)
-    if res:
-        df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, measurement_flag, high_perf_flag = res
+    if not res:
+        continue
 
-        # COMMENT ENGINE
-        comment = ""
+    df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, measurement_flag, high_perf_flag = res
 
-        if stall_flag:
-            comment += "🔴 STALL DETECTED\n"
-            comment += f"- Wind: 4–10 m/s\n- Bins: {stall_bins}\n"
-            comment += "- Deviation: -40% to -72%\n"
-            comment += "- Stable low output (std <1)\n"
+    # COMMENT ENGINE
+    comment = ""
 
-        elif avg_dev < -2:
-            comment += "🔴 UNDERPERFORMANCE\n"
+    if stall_flag:
+        comment += "🔴 STALL DETECTED\n"
+        comment += f"- Wind: 4–10 m/s\n"
+        comment += f"- Deviation: -40% to -72%\n"
+        comment += f"- Bins: {stall_bins}\n"
+        comment += "- Stable low output (std <1)\n"
 
-        if avg_dev > 8:
-            comment += "\n🟠 HIGH OVERPERFORMANCE\n"
-            comment += "Possible: Sensor / IPC / NTF\n"
+    elif avg_dev < -2:
+        comment += "🔴 UNDERPERFORMANCE\n"
 
-        elif avg_dev > 2:
-            comment += "\n🟠 SLIGHT OVERPERFORMANCE\n"
+    if avg_dev > 8:
+        comment += "\n🟠 HIGH OVERPERFORMANCE\n"
+        comment += "• Measurement issue\n• NTF\n• Sensor misalignment\n• IPC inactive\n"
 
-        if -TOLERANCE <= avg_dev <= TOLERANCE:
-            comment += "\n🟢 NORMAL\n"
+    elif avg_dev > 2:
+        comment += "\n🟠 SLIGHT OVERPERFORMANCE\n"
 
-        if derating_flag:
-            comment += "\n⚠️ DERATING ACTIVE (Temp / Curtailment)\n"
+    if -TOLERANCE <= avg_dev <= TOLERANCE:
+        comment += "\n🟢 NORMAL PERFORMANCE\n"
 
-        if measurement_flag:
-            comment += "\n⚠️ MEASUREMENT ISSUE (Low wind power)\n"
+    if derating_flag:
+        comment += "\n⚠️ DERATING ACTIVE (Temp / Curtailment)\n"
 
-        comment += f"\nAvailability: {round(availability,1)}%"
-        comment += f"\nStd Dev: {round(std_dev,2)}"
+    if measurement_flag:
+        comment += "\n⚠️ MEASUREMENT ISSUE (Low wind power)\n"
 
-        results.append({"Turbine":t,"Deviation_%":avg_dev,"Remarks":comment})
+    comment += f"\nAvailability: {round(availability,1)}%"
+    comment += f"\nStd Dev: {round(std_dev,2)}"
+
+    # STATUS
+    if stall_flag:
+        status = "🔴 STALL"
+    elif avg_dev < -2:
+        status = "🔴 UNDER"
+    elif avg_dev > 8:
+        status = "🟠 OVER"
+    else:
+        status = "🟢 NORMAL"
+
+    results.append({
+        "Turbine": t,
+        "Deviation_%": avg_dev,
+        "Status": status,
+        "Remarks": comment
+    })
 
 results_df = pd.DataFrame(results)
 
@@ -214,13 +230,16 @@ fig_bar = go.Figure()
 fig_bar.add_trace(go.Bar(x=results_df["Turbine"], y=results_df["Deviation_%"], marker_color=colors))
 st.plotly_chart(fig_bar, use_container_width=True)
 
-# ---------------- GRAPHS ----------------
+# ---------------- GRAPHS + COMMENTS ----------------
 st.subheader("Turbine Analysis")
 
 cols = st.columns(2)
-i=0
+i = 0
 
-for t in results_df["Turbine"]:
+for idx, row in results_df.iterrows():
+    t = row["Turbine"]
+    comment = row["Remarks"]
+
     res = process_turbine(t)
     if not res:
         continue
@@ -230,15 +249,19 @@ for t in results_df["Turbine"]:
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_t[wind_col], y=df_t[power_col],
                              mode='markers', marker=dict(size=3, opacity=0.4)))
+
     fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["AvgPower"],
                              mode='lines+markers'))
+
     fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["RefPower"],
                              mode='lines', line=dict(dash='dash')))
 
     fig.update_layout(title=f"{t} | Dev: {round(avg_dev,1)}%", height=350)
 
-    cols[i%2].plotly_chart(fig, use_container_width=True)
-    i+=1
+    cols[i % 2].plotly_chart(fig, use_container_width=True)
+    cols[i % 2].markdown(f"```\n{comment}\n```")
+
+    i += 1
 
 # ---------------- TABLE ----------------
 st.subheader("Ranking")
