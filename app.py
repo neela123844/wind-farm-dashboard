@@ -2,45 +2,35 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from scipy.signal import savgol_filter
 from datetime import timedelta
 import os
 
+# ML
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+
 st.set_page_config(layout="wide")
 
-# LOGO
+# ---------------- LOGO ----------------
 logo_path = os.path.join(os.path.dirname(__file__), "Envision.png")
 col1, col2, col3 = st.columns([1,2,1])
 with col2:
-    st.image(logo_path, width=300)
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=300)
 
-st.title("Wind Farm Performance Analytics Dashboard")
-st.markdown("### 📊 Performance Monitoring with SCADA vs Reference Curve")
+st.title("Wind Farm Performance Analytics (GP + SPRT)")
 
-REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
+# ---------------- CONSTANTS ----------------
+RATED_POWER = 3400.0
 
-BIN_SIZE = 0.5
-RATED_SPEED = 10.0
-
-# SIDEBAR
+# ---------------- SIDEBAR ----------------
 uploaded_file = st.sidebar.file_uploader("Upload SCADA CSV", type=["csv"])
 
 if uploaded_file is None:
     st.warning("Please upload SCADA file")
     st.stop()
 
-site = st.sidebar.selectbox(
-    "Select Site for Reference Curve",
-    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki",
-     "CleanMax Motadevaliya","Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar",
-     "FP_Kudligi","Sprng TN","Otha Pithalpur-GJ","AMGEPL,Kurnool AP","ReNew1_Gadag",
-     "partner Ottapidaum","Cleanmax SANATHALI","Cleanmax Babra","RenfraEnergy Trichy",
-     "RENEW-03 Sholapur","Renew2 Chandwad","ReNew-4 Patoda","Clean max Jagalur",
-     "Sembcorp Tuticorin","Renew-4 Kudligi","Renew Otha","Cleanmax Honavad",
-     "Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
-)
-
-# LOAD SCADA
+# ---------------- LOAD SCADA ----------------
 @st.cache_data
 def load_scada(file):
     df = pd.read_csv(file, low_memory=False)
@@ -54,15 +44,20 @@ def load_scada(file):
     df[wind_col] = pd.to_numeric(df[wind_col], errors="coerce")
     df[power_col] = pd.to_numeric(df[power_col], errors="coerce")
 
-    df = df.dropna(subset=[wind_col,power_col,time_col])
+    df = df.dropna(subset=[wind_col, power_col, time_col])
+
+    if "Name" not in df.columns:
+        df["Name"] = "Turbine-1"
+
     df["Name"] = df["Name"].astype(str).str.strip()
 
     return df, wind_col, power_col, time_col
 
 df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
-# DATE FILTER
+# ---------------- DATE FILTER ----------------
 period = st.sidebar.selectbox("Period", ["Last 15 Days","Weekly","Monthly"])
+
 end_date = df[time_col].max()
 
 if period == "Last 15 Days":
@@ -74,129 +69,127 @@ else:
 
 df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
 
-# LOAD REFERENCE
+# ---------------- GP MODEL ----------------
 @st.cache_data
-def load_reference(site):
-    ref_raw = pd.read_excel(REF_FILE, header=None)
+def train_gp_model(df_t, wind_col, power_col):
 
-    location=None
-    for r in range(ref_raw.shape[0]):
-        for c in range(ref_raw.shape[1]):
-            if site.lower() in str(ref_raw.iloc[r,c]).lower():
-                location=(r,c)
-                break
-        if location:
-            break
+    X = df_t[[wind_col]].copy()
 
-    if location is None:
-        st.error("Site not found")
-        st.stop()
+    # Optional features (if exist)
+    optional_cols = ["Wind Direction", "Pitch", "Yaw", "Rotor Speed"]
 
-    r,c = location
+    for col in optional_cols:
+        if col in df_t.columns:
+            X[col] = pd.to_numeric(df_t[col], errors="coerce")
 
-    ref = ref_raw.iloc[r+2:r+60,[c-1,c+3]].copy()
-    ref.columns=["WindSpeed","RefPower"]
+    y = df_t[power_col]
 
-    ref["WindSpeed"] = pd.to_numeric(ref["WindSpeed"],errors="coerce")
-    ref["RefPower"] = pd.to_numeric(ref["RefPower"],errors="coerce")
-    ref = ref.dropna().sort_values("WindSpeed")
+    valid = X.notna().all(axis=1) & y.notna()
+    X = X[valid]
+    y = y[valid]
 
-    wind_bins = np.arange(3,25.5,BIN_SIZE)
+    kernel = RBF(length_scale=1.0) + WhiteKernel()
 
-    ref_interp = np.interp(
-        wind_bins,
-        ref["WindSpeed"].values,
-        ref["RefPower"].values
-    )
+    gp = GaussianProcessRegressor(kernel=kernel, alpha=1e-2)
+    gp.fit(X, y)
 
-    return pd.DataFrame({"WindBin":wind_bins,"RefPower":ref_interp})
+    return gp, X.columns.tolist()
 
-ref_curve = load_reference(site)
+# ---------------- SPRT ----------------
+def sprt_test(residuals, mu0, sigma0, alpha=0.05, beta=0.05):
 
-# PROCESS
+    A = np.log(beta / (1 - alpha))
+    B = np.log((1 - beta) / alpha)
+
+    mu1_up = mu0 + 3
+    mu1_down = mu0 - 3
+    sigma1 = sigma0 * 1.5
+
+    logR_up = 0
+    logR_down = 0
+
+    for e in residuals:
+
+        logR_up += ((e - mu1_up)**2 / (2*sigma1**2)) - ((e - mu0)**2 / (2*sigma0**2))
+        logR_down += ((e - mu1_down)**2 / (2*sigma1**2)) - ((e - mu0)**2 / (2*sigma0**2))
+
+        if logR_up >= B or logR_down >= B:
+            return True
+
+    return False
+
+# ---------------- PROCESS TURBINE ----------------
 def process_turbine(t):
-    df_t = df[df["Name"]==t].copy()
-    df_t = df_t[(df_t[wind_col]>=3)&(df_t[wind_col]<=25)&(df_t[power_col]>0)]
 
-    if len(df_t)<30:
+    df_t = df[df["Name"] == t].copy()
+
+    df_t = df_t[(df_t[wind_col] >= 3) & (df_t[wind_col] <= 25)]
+
+    if len(df_t) < 50:
         return None
+
+    gp, feature_cols = train_gp_model(df_t, wind_col, power_col)
+
+    X_test = df_t[feature_cols]
+    y_actual = df_t[power_col]
+
+    y_pred = gp.predict(X_test)
+
+    residuals = y_actual - y_pred
+
+    mu0 = residuals.mean()
+    sigma0 = residuals.std()
+
+    alarm = sprt_test(residuals.values, mu0, sigma0)
+
+    deviation = (residuals.mean() / RATED_POWER) * 100
 
     expected_points = ((end_date - start_date).total_seconds() / 600)
     availability = (len(df_t) / expected_points) * 100
-    std_dev = df_t[power_col].std()
 
-    df_t["WindBin"] = (df_t[wind_col]/BIN_SIZE).round()*BIN_SIZE
+    std_dev = y_actual.std()
 
-    actual = df_t.groupby("WindBin").agg(AvgPower=(power_col,"mean")).reset_index()
-    merged = ref_curve.merge(actual,on="WindBin",how="left")
+    return df_t, y_pred, deviation, alarm, availability, std_dev
 
-    valid = merged["AvgPower"].notna()
-    if valid.sum()>7:
-        merged.loc[valid,"AvgPower"] = savgol_filter(merged.loc[valid,"AvgPower"],7,2)
+# ---------------- SUMMARY ----------------
+results = []
 
-    merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
-    avg_dev = merged["Deviation_%"].mean(skipna=True)
-
-    stall_bins = merged[
-        (merged["WindBin"] >= 4) &
-        (merged["WindBin"] <= 10) &
-        (merged["Deviation_%"] <= -40) &
-        (merged["Deviation_%"] >= -72)
-    ]["WindBin"].tolist()
-
-    stall_flag = len(stall_bins) >= 3
-
-    return df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev
-
-# SUMMARY
-results=[]
 for t in df["Name"].unique():
     res = process_turbine(t)
     if res:
-        _,_,dev,_,_,_,_ = res
-        results.append({"Turbine":t,"Deviation_%":dev})
+        _,_,dev,alarm,_,_ = res
+        results.append({
+            "Turbine": t,
+            "Deviation_%": dev,
+            "Alarm": "Yes" if alarm else "No"
+        })
 
 results_df = pd.DataFrame(results)
 
-def get_status(dev):
-    if dev < -2:
-        return "Under"
-    elif dev > 2:
-        return "Over"
-    else:
-        return "Normal"
+# ---------------- HEADER ----------------
+st.subheader(f"Performance ({start_date.date()} → {end_date.date()})")
 
-results_df["Status"] = results_df["Deviation_%"].apply(get_status)
-
-# BAR GRAPH
-colors = ["red" if d < -2 else "orange" if d > 2 else "green" for d in results_df["Deviation_%"]]
+# ---------------- BAR CHART ----------------
+colors = ["red" if a=="Yes" else "green" for a in results_df["Alarm"]]
 
 fig_bar = go.Figure()
 fig_bar.add_trace(go.Bar(
     x=results_df["Turbine"],
     y=results_df["Deviation_%"],
-    marker_color=colors,
-    text=[f"{round(v,1)}%" for v in results_df["Deviation_%"]],
-    textposition="outside"
+    marker_color=colors
 ))
-
-fig_bar.update_layout(
-    title="Turbine Deviation Overview",
-    xaxis_title="Turbine",
-    yaxis_title="Deviation (%)",
-    height=400
-)
 
 st.plotly_chart(fig_bar, use_container_width=True)
 
-# ALL TURBINES
-st.subheader("All Turbine Analysis")
+# ---------------- ALL TURBINES ----------------
+st.subheader("Detailed Analysis")
 
 cols = st.columns(2)
-i=0
+i = 0
 
 for t in results_df["Turbine"]:
-    df_f, merged, avg_dev, stall_flag, stall_bins, availability, std_dev = process_turbine(t)
+
+    df_f, y_pred, dev, alarm, availability, std_dev = process_turbine(t)
 
     fig = go.Figure()
 
@@ -204,67 +197,47 @@ for t in results_df["Turbine"]:
         x=df_f[wind_col],
         y=df_f[power_col],
         mode='markers',
-        name="SCADA Points",
-        marker=dict(size=4, opacity=0.5, color="blue")
+        marker=dict(size=3, opacity=0.4),
+        name="Actual"
     ))
 
     fig.add_trace(go.Scatter(
-        x=merged["WindBin"],
-        y=merged["AvgPower"],
-        mode='lines+markers',
-        name="Actual Curve",
-        line=dict(color="green", width=2)
+        x=df_f[wind_col],
+        y=y_pred,
+        mode='markers',
+        marker=dict(size=3, color='green'),
+        name="GP Prediction"
     ))
 
-    fig.add_trace(go.Scatter(
-        x=merged["WindBin"],
-        y=merged["RefPower"],
-        mode='lines',
-        name="Reference Curve",
-        line=dict(color="red", dash='dash', width=3)
-    ))
-
-    fig.update_layout(
-        title=f"{t} | Dev: {round(avg_dev,1)}%",
-        xaxis_title="Wind Speed (m/s)",
-        yaxis_title="Power (kW)",
-        legend_title="Legend",
-        height=400
-    )
-
-    # COMMENTS
+    # COMMENT
     comment = ""
-    if avg_dev < -2:
+
+    if alarm:
+        comment += "🚨 SPRT Alarm Detected\n"
+
+    if dev < -2:
         comment += "Underperformance\n"
-        if stall_flag:
-            comment += f"- Stall at {stall_bins}\n"
-    elif avg_dev > 8:
-        comment += "High Overperformance\n- Sensor/Measurement Issue\n"
-    elif avg_dev > 2:
-        comment += "Slight Overperformance\n"
+    elif dev > 2:
+        comment += "Overperformance\n"
     else:
-        comment += "Normal Performance\n"
+        comment += "Normal\n"
 
     comment += f"\nAvailability: {round(availability,1)}%"
     comment += f"\nStd Dev: {round(std_dev,2)}"
 
+    color = "red" if alarm else "green"
+
+    fig.update_layout(
+        title=f"{t} | Dev: {round(dev,1)}%",
+        title_font=dict(color=color),
+        height=350
+    )
+
     cols[i%2].plotly_chart(fig, use_container_width=True)
     cols[i%2].markdown(f"```\n{comment}\n```")
-    i+=1
 
-# COLORED RANKING
+    i += 1
+
+# ---------------- TABLE ----------------
 st.subheader("Ranking")
-
-def color_status(val):
-    if val == "Under":
-        return "background-color: red; color: white"
-    elif val == "Over":
-        return "background-color: orange; color: black"
-    else:
-        return "background-color: green; color: white"
-
-styled_df = results_df.sort_values("Deviation_%").style.applymap(
-    color_status, subset=["Status"]
-)
-
-st.dataframe(styled_df, use_container_width=True)
+st.dataframe(results_df.sort_values("Deviation_%")
