@@ -16,7 +16,7 @@ with col2:
 
 st.title("Wind Farm Performance Analytics Dashboard")
 
-REF_FILE = "India site Standard & Theoretical PC data 123.xlsx"
+REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
 
 BIN_SIZE = 0.5
 TOLERANCE = 2.0
@@ -29,11 +29,16 @@ if uploaded_file is None:
     st.warning("Please upload SCADA file")
     st.stop()
 
+# SITE SELECTOR
 site = st.sidebar.selectbox(
-    "Select Site",
-    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2",
-     "AMP_Energy","Wanki","CleanMax Motadevaliya","Ayana Amerli"]
+    "Select Site for Reference Curve",
+    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki","CleanMax Motadevaliya",
+     "Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar","FP_Kudligi","Sprng TN","Otha Pithalpur-GJ",
+     "AMGEPL,Kurnool AP","ReNew1_Gadag","partner Ottapidaum","Cleanmax Motadevaliya","Cleanmax SANATHALI","Cleanmax Babra",
+     "RenfraEnergy Trichy","RENEW-03 Sholapur","Renew2 Chandwad","ReNew-4 Patoda","Clean max Jagalur","Sembcorp Tuticorin",
+     "Renew-4 Kudligi","Renew Otha","Cleanmax Honavad"," Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
 )
+
 
 # ---------------- LOAD SCADA ----------------
 @st.cache_data
