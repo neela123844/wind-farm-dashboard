@@ -16,7 +16,7 @@ with col2:
 
 st.title("Wind Farm Performance Analytics Dashboard")
 
-REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
+REF_FILE = "India site Standard & Theoretical PC data 123.xlsx"
 
 BIN_SIZE = 0.5
 TOLERANCE = 2.0
@@ -29,16 +29,11 @@ if uploaded_file is None:
     st.warning("Please upload SCADA file")
     st.stop()
 
-# SITE SELECTOR
 site = st.sidebar.selectbox(
-    "Select Site for Reference Curve",
-    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki","CleanMax Motadevaliya",
-     "Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar","FP_Kudligi","Sprng TN","Otha Pithalpur-GJ",
-     "AMGEPL,Kurnool AP","ReNew1_Gadag","partner Ottapidaum","Cleanmax Motadevaliya","Cleanmax SANATHALI","Cleanmax Babra",
-     "RenfraEnergy Trichy","RENEW-03 Sholapur","Renew2 Chandwad","ReNew-4 Patoda","Clean max Jagalur","Sembcorp Tuticorin",
-     "Renew-4 Kudligi","Renew Otha","Cleanmax Honavad"," Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
+    "Select Site",
+    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2",
+     "AMP_Energy","Wanki","CleanMax Motadevaliya","Ayana Amerli"]
 )
-
 
 # ---------------- LOAD SCADA ----------------
 @st.cache_data
@@ -137,7 +132,7 @@ def process_turbine(t):
     merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
     avg_dev = merged["Deviation_%"].mean(skipna=True)
 
-    # Stall detection
+    # Stall
     stall_df = merged[
         (merged["WindBin"]>=4)&(merged["WindBin"]<=10)&
         (merged["Deviation_%"]<=-40)&(merged["Deviation_%"]>=-72)
@@ -145,44 +140,40 @@ def process_turbine(t):
     stall_bins = stall_df["WindBin"].tolist()
     stall_flag = (len(stall_bins)>=3) and (availability>=99) and (std_dev<1)
 
-    # Derating detection
+    # Derating
     derating_flag = False
     for col in status_cols:
         if df_t[col].astype(str).str.contains("derat|limit|curtail|temp", case=False, na=False).any():
             derating_flag = True
 
-    # Measurement issue
+    # Measurement
     measurement_flag = len(df_t[(df_t[wind_col]<4)&(df_t[power_col]>0.2*RATED_POWER)]) > 10
 
     high_perf_flag = avg_dev > 8
 
-    return avg_dev, stall_flag, availability, std_dev, derating_flag, measurement_flag, high_perf_flag
+    return df_t, merged, avg_dev, stall_flag, availability, std_dev, derating_flag, measurement_flag, high_perf_flag
 
 # ---------------- SUMMARY ----------------
 results=[]
-status_list=[]
+remarks=[]
 
 for t in df["Name"].unique():
     res = process_turbine(t)
     if res:
-        avg_dev, stall_flag, availability, std_dev, derating_flag, measurement_flag, high_perf_flag = res
+        df_t, merged, avg_dev, stall_flag, availability, std_dev, derating_flag, measurement_flag, high_perf_flag = res
 
         results.append({"Turbine":t,"Deviation_%":avg_dev})
 
-        # STATUS + EMOJI
-        if stall_flag:
-            status="🔴 STALL"
-        elif avg_dev < -2:
-            status="🔴 UNDER"
-        elif avg_dev > 8:
-            status="🟠 OVER"
-        else:
-            status="🟢 NORMAL"
-
-        # COMMENTS
         comment=""
         if stall_flag:
-            comment+="STALL detected\n"
+            comment+="🔴 STALL\n"
+        elif avg_dev < -2:
+            comment+="🔴 UNDER\n"
+        elif avg_dev > 8:
+            comment+="🟠 OVER\n"
+        else:
+            comment+="🟢 NORMAL\n"
+
         if derating_flag:
             comment+="Derating active\n"
         if measurement_flag:
@@ -193,29 +184,47 @@ for t in df["Name"].unique():
         comment+=f"\nAvailability: {round(availability,1)}%"
         comment+=f"\nStd Dev: {round(std_dev,2)}"
 
-        status_list.append(status + "\n" + comment)
+        remarks.append(comment)
 
 results_df = pd.DataFrame(results)
-results_df["Remarks"] = status_list
-
-# ---------------- HEADER ----------------
-st.subheader(f"{site} Performance ({start_date.date()} → {end_date.date()})")
+results_df["Remarks"] = remarks
 
 # ---------------- BAR ----------------
 colors = ["red" if d < -2 else "orange" if d > 2 else "green" for d in results_df["Deviation_%"]]
 
-fig = go.Figure()
-fig.add_trace(go.Bar(
-    x=results_df["Turbine"],
-    y=results_df["Deviation_%"],
-    marker_color=colors
-))
-st.plotly_chart(fig, use_container_width=True)
+fig_bar = go.Figure()
+fig_bar.add_trace(go.Bar(x=results_df["Turbine"], y=results_df["Deviation_%"], marker_color=colors))
+st.plotly_chart(fig_bar, use_container_width=True)
+
+# ---------------- GRAPHS ----------------
+st.subheader("Turbine Analysis")
+
+cols = st.columns(2)
+i=0
+
+for t in results_df["Turbine"]:
+    res = process_turbine(t)
+    if not res:
+        continue
+
+    df_t, merged, avg_dev, *_ = res
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_t[wind_col], y=df_t[power_col],
+                             mode='markers', marker=dict(size=3, opacity=0.4),
+                             name="Raw"))
+
+    fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["AvgPower"],
+                             mode='lines+markers', name="Actual"))
+
+    fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["RefPower"],
+                             mode='lines', line=dict(dash='dash'), name="Reference"))
+
+    fig.update_layout(title=f"{t} | Dev: {round(avg_dev,1)}%", height=350)
+
+    cols[i%2].plotly_chart(fig, use_container_width=True)
+    i+=1
 
 # ---------------- TABLE ----------------
 st.subheader("Ranking")
-
-st.dataframe(
-    results_df.sort_values("Deviation_%"),
-    use_container_width=True
-)
+st.dataframe(results_df.sort_values("Deviation_%"), use_container_width=True)
