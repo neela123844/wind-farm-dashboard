@@ -22,7 +22,7 @@ BIN_SIZE = 0.5
 TOLERANCE = 2.0
 RATED_POWER = 3400.0
 
-# SIDEBAR
+# ---------------- SIDEBAR ----------------
 uploaded_file = st.sidebar.file_uploader("Upload SCADA CSV", type=["csv"])
 
 if uploaded_file is None:
@@ -57,7 +57,6 @@ def load_scada(file):
     df = df.dropna(subset=[wind_col, power_col, time_col])
     df["Name"] = df["Name"].astype(str).str.strip()
 
-    # detect status/derating columns
     status_cols = [c for c in df.columns if any(x in c.lower()
                     for x in ["status","alarm","derate","limit","curtail","temp","pitch"])]
 
@@ -106,7 +105,6 @@ def load_reference(site):
     ref["RefPower"] = pd.to_numeric(ref["RefPower"])
 
     wind_bins = np.arange(3,25.5,BIN_SIZE)
-
     ref_interp = np.interp(wind_bins, ref["WindSpeed"], ref["RefPower"])
 
     return pd.DataFrame({"WindBin":wind_bins,"RefPower":ref_interp})
@@ -122,13 +120,11 @@ def process_turbine(t):
     if len(df_t)<30:
         return None
 
-    # availability
     expected_points = ((end_date - start_date).total_seconds() / 600)
     availability = (len(df_t) / expected_points) * 100
 
     std_dev = df_t[power_col].std()
 
-    # binning
     df_t["WindBin"] = (df_t[wind_col]/BIN_SIZE).round()*BIN_SIZE
 
     actual = df_t.groupby("WindBin").agg(AvgPower=(power_col,"mean")).reset_index()
@@ -138,47 +134,69 @@ def process_turbine(t):
     if valid.sum()>7:
         merged.loc[valid,"AvgPower"] = savgol_filter(merged.loc[valid,"AvgPower"],7,2)
 
-    # deviation
     merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
     avg_dev = merged["Deviation_%"].mean(skipna=True)
 
-    # tolerance filtering
-    merged["WithinTolerance"] = merged["Deviation_%"].between(-TOLERANCE, TOLERANCE)
-
-    # stall detection
+    # Stall detection
     stall_df = merged[
         (merged["WindBin"]>=4)&(merged["WindBin"]<=10)&
         (merged["Deviation_%"]<=-40)&(merged["Deviation_%"]>=-72)
     ]
-
     stall_bins = stall_df["WindBin"].tolist()
     stall_flag = (len(stall_bins)>=3) and (availability>=99) and (std_dev<1)
 
-    # derating detection
+    # Derating detection
     derating_flag = False
-    derating_reason = []
     for col in status_cols:
         if df_t[col].astype(str).str.contains("derat|limit|curtail|temp", case=False, na=False).any():
             derating_flag = True
-            derating_reason.append(col)
 
-    # measurement issue
+    # Measurement issue
     measurement_flag = len(df_t[(df_t[wind_col]<4)&(df_t[power_col]>0.2*RATED_POWER)]) > 10
 
-    # overperformance
     high_perf_flag = avg_dev > 8
 
-    return df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, derating_reason, measurement_flag, high_perf_flag
+    return avg_dev, stall_flag, availability, std_dev, derating_flag, measurement_flag, high_perf_flag
 
 # ---------------- SUMMARY ----------------
 results=[]
+status_list=[]
+
 for t in df["Name"].unique():
     res = process_turbine(t)
     if res:
-        _,_,dev,_,_,_,_,_,_,_,_ = res
-        results.append({"Turbine":t,"Deviation_%":dev})
+        avg_dev, stall_flag, availability, std_dev, derating_flag, measurement_flag, high_perf_flag = res
+
+        results.append({"Turbine":t,"Deviation_%":avg_dev})
+
+        # STATUS + EMOJI
+        if stall_flag:
+            status="🔴 STALL"
+        elif avg_dev < -2:
+            status="🔴 UNDER"
+        elif avg_dev > 8:
+            status="🟠 OVER"
+        else:
+            status="🟢 NORMAL"
+
+        # COMMENTS
+        comment=""
+        if stall_flag:
+            comment+="STALL detected\n"
+        if derating_flag:
+            comment+="Derating active\n"
+        if measurement_flag:
+            comment+="Measurement issue\n"
+        if high_perf_flag:
+            comment+="High overperformance\n"
+
+        comment+=f"\nAvailability: {round(availability,1)}%"
+        comment+=f"\nStd Dev: {round(std_dev,2)}"
+
+        status_list.append(status + "\n" + comment)
 
 results_df = pd.DataFrame(results)
+results_df["Remarks"] = status_list
 
 # ---------------- HEADER ----------------
 st.subheader(f"{site} Performance ({start_date.date()} → {end_date.date()})")
@@ -186,78 +204,18 @@ st.subheader(f"{site} Performance ({start_date.date()} → {end_date.date()})")
 # ---------------- BAR ----------------
 colors = ["red" if d < -2 else "orange" if d > 2 else "green" for d in results_df["Deviation_%"]]
 
-fig_bar = go.Figure()
-fig_bar.add_trace(go.Bar(
+fig = go.Figure()
+fig.add_trace(go.Bar(
     x=results_df["Turbine"],
     y=results_df["Deviation_%"],
     marker_color=colors
 ))
-st.plotly_chart(fig_bar, use_container_width=True)
-
-# ---------------- DETAILS ----------------
-st.subheader("All Turbine Analysis")
-
-cols = st.columns(2)
-i=0
-
-for t in results_df["Turbine"]:
-    data = process_turbine(t)
-    if not data:
-        continue
-
-    df_f, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, derating_reason, measurement_flag, high_perf_flag = data
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_f[wind_col],y=df_f[power_col],mode='markers',marker=dict(size=3,opacity=0.4)))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines+markers'))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],mode='lines',line=dict(dash='dash')))
-
-    # COMMENTS
-    comment=""
-
-    if stall_flag:
-        comment+="STALL DETECTED\n"
-        comment+=f"Bins: {stall_bins}\n"
-
-    if avg_dev < -2:
-        comment+="Underperformance\n"
-
-    if derating_flag:
-        comment+=f"Derating active: {derating_reason}\n"
-
-    if measurement_flag:
-        comment+="Measurement issue (power at low wind)\n"
-
-    if high_perf_flag:
-        comment+="High overperformance (>8%)\n"
-        comment+="Possible: Sensor issue / IPC / NTF\n"
-
-    elif avg_dev > 2:
-        comment+="Slight overperformance\n"
-
-    if -TOLERANCE <= avg_dev <= TOLERANCE:
-        comment+="Normal performance\n"
-
-    comment+=f"\nAvailability: {round(availability,1)}%"
-    comment+=f"\nStd Dev: {round(std_dev,2)}"
-
-    color = "red" if (avg_dev < -2 or stall_flag) else "orange" if avg_dev > 2 else "green"
-
-    fig.update_layout(title=f"{t} | Dev: {round(avg_dev,1)}%", title_font=dict(color=color), height=350)
-
-    cols[i%2].plotly_chart(fig, use_container_width=True)
-    cols[i%2].markdown(f"```\n{comment}\n```")
-
-    i+=1
+st.plotly_chart(fig, use_container_width=True)
 
 # ---------------- TABLE ----------------
-def color_table(val):
-    if val < -2:
-        return "background-color:red;color:white"
-    elif val > 8:
-        return "background-color:orange"
-    else:
-        return "background-color:green;color:white"
-
 st.subheader("Ranking")
-st.dataframe(results_df.sort_values("Deviation_%").style.applymap(color_table, subset=["Deviation_%"]))
+
+st.dataframe(
+    results_df.sort_values("Deviation_%"),
+    use_container_width=True
+)
