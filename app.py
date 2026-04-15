@@ -75,7 +75,6 @@ def train_gp_model(df_t, wind_col, power_col):
 
     X = df_t[[wind_col]].copy()
 
-    # Optional features (if exist)
     optional_cols = ["Wind Direction", "Pitch", "Yaw", "Rotor Speed"]
 
     for col in optional_cols:
@@ -98,7 +97,6 @@ def train_gp_model(df_t, wind_col, power_col):
 # ---------------- SPRT ----------------
 def sprt_test(residuals, mu0, sigma0, alpha=0.05, beta=0.05):
 
-    A = np.log(beta / (1 - alpha))
     B = np.log((1 - beta) / alpha)
 
     mu1_up = mu0 + 3
@@ -122,7 +120,6 @@ def sprt_test(residuals, mu0, sigma0, alpha=0.05, beta=0.05):
 def process_turbine(t):
 
     df_t = df[df["Name"] == t].copy()
-
     df_t = df_t[(df_t[wind_col] >= 3) & (df_t[wind_col] <= 25)]
 
     if len(df_t) < 50:
@@ -181,7 +178,7 @@ fig_bar.add_trace(go.Bar(
 
 st.plotly_chart(fig_bar, use_container_width=True)
 
-# ---------------- ALL TURBINES ----------------
+# ---------------- DETAIL ----------------
 st.subheader("Detailed Analysis")
 
 cols = st.columns(2)
@@ -209,7 +206,6 @@ for t in results_df["Turbine"]:
         name="GP Prediction"
     ))
 
-    # COMMENT
     comment = ""
 
     if alarm:
@@ -240,4 +236,4 @@ for t in results_df["Turbine"]:
 
 # ---------------- TABLE ----------------
 st.subheader("Ranking")
-st.dataframe(results_df.sort_values("Deviation_%")
+st.dataframe(results_df.sort_values("Deviation_%"))
