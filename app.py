@@ -16,7 +16,7 @@ with col2:
 
 st.title("Wind Farm Performance Analytics Dashboard")
 
-REF_FILE = "India site Standard & Theoretical PC data 123.xlsx"
+REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
 
 BIN_SIZE = 0.5
 TOLERANCE = 2.0
