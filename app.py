@@ -15,13 +15,12 @@ with col2:
     st.image(logo_path, width=300)
 
 st.title("Wind Farm Performance Analytics Dashboard")
+st.markdown("### 📊 Performance Monitoring with SCADA vs Reference Curve")
 
 REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
 
 BIN_SIZE = 0.5
-TOLERANCE = 2.0
 RATED_SPEED = 10.0
-RATED_POWER = 3400.0
 
 # SIDEBAR
 uploaded_file = st.sidebar.file_uploader("Upload SCADA CSV", type=["csv"])
@@ -117,17 +116,13 @@ ref_curve = load_reference(site)
 # PROCESS
 def process_turbine(t):
     df_t = df[df["Name"]==t].copy()
-
     df_t = df_t[(df_t[wind_col]>=3)&(df_t[wind_col]<=25)&(df_t[power_col]>0)]
 
     if len(df_t)<30:
         return None
 
-    # DATA AVAILABILITY
     expected_points = ((end_date - start_date).total_seconds() / 600)
     availability = (len(df_t) / expected_points) * 100
-
-    # STD DEV CHECK
     std_dev = df_t[power_col].std()
 
     df_t["WindBin"] = (df_t[wind_col]/BIN_SIZE).round()*BIN_SIZE
@@ -142,7 +137,6 @@ def process_turbine(t):
     merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
     avg_dev = merged["Deviation_%"].mean(skipna=True)
 
-    # STALL DETECTION (YOUR RULES)
     stall_bins = merged[
         (merged["WindBin"] >= 4) &
         (merged["WindBin"] <= 10) &
@@ -164,7 +158,6 @@ for t in df["Name"].unique():
 
 results_df = pd.DataFrame(results)
 
-# STATUS
 def get_status(dev):
     if dev < -2:
         return "Under"
@@ -175,9 +168,6 @@ def get_status(dev):
 
 results_df["Status"] = results_df["Deviation_%"].apply(get_status)
 
-# HEADER
-st.subheader(f"{site} Performance ({start_date.date()} → {end_date.date()})")
-
 # BAR GRAPH
 colors = ["red" if d < -2 else "orange" if d > 2 else "green" for d in results_df["Deviation_%"]]
 
@@ -185,11 +175,21 @@ fig_bar = go.Figure()
 fig_bar.add_trace(go.Bar(
     x=results_df["Turbine"],
     y=results_df["Deviation_%"],
-    marker_color=colors
+    marker_color=colors,
+    text=[f"{round(v,1)}%" for v in results_df["Deviation_%"]],
+    textposition="outside"
 ))
+
+fig_bar.update_layout(
+    title="Turbine Deviation Overview",
+    xaxis_title="Turbine",
+    yaxis_title="Deviation (%)",
+    height=400
+)
+
 st.plotly_chart(fig_bar, use_container_width=True)
 
-# ALL MODE (UPDATED INSIGHTS)
+# ALL TURBINES
 st.subheader("All Turbine Analysis")
 
 cols = st.columns(2)
@@ -199,52 +199,72 @@ for t in results_df["Turbine"]:
     df_f, merged, avg_dev, stall_flag, stall_bins, availability, std_dev = process_turbine(t)
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_f[wind_col],y=df_f[power_col],
-                             mode='markers',marker=dict(size=3,opacity=0.4)))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines+markers'))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],
-                             mode='lines',line=dict(dash='dash')))
 
-    # COMMENT LOGIC
+    fig.add_trace(go.Scatter(
+        x=df_f[wind_col],
+        y=df_f[power_col],
+        mode='markers',
+        name="SCADA Points",
+        marker=dict(size=4, opacity=0.5, color="blue")
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=merged["WindBin"],
+        y=merged["AvgPower"],
+        mode='lines+markers',
+        name="Actual Curve",
+        line=dict(color="green", width=2)
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=merged["WindBin"],
+        y=merged["RefPower"],
+        mode='lines',
+        name="Reference Curve",
+        line=dict(color="red", dash='dash', width=3)
+    ))
+
+    fig.update_layout(
+        title=f"{t} | Dev: {round(avg_dev,1)}%",
+        xaxis_title="Wind Speed (m/s)",
+        yaxis_title="Power (kW)",
+        legend_title="Legend",
+        height=400
+    )
+
+    # COMMENTS
     comment = ""
-
     if avg_dev < -2:
         comment += "Underperformance\n"
-
         if stall_flag:
-            comment += f"- Stall detected at {stall_bins}\n"
-
-        if std_dev < 1:
-            comment += "- Stable but low output (possible blade issue)\n"
-
-        if availability < 95:
-            comment += "- Low data availability\n"
-
+            comment += f"- Stall at {stall_bins}\n"
     elif avg_dev > 8:
-        comment += "High Overperformance (>8%)\n"
-        comment += "- Possible measurement issue\n- NTF\n- Sensor misalignment\n- IPC inactive\n"
-
+        comment += "High Overperformance\n- Sensor/Measurement Issue\n"
     elif avg_dev > 2:
-        comment += "Slight Overperformance\n- Wind variation or sensor drift\n"
-
+        comment += "Slight Overperformance\n"
     else:
         comment += "Normal Performance\n"
 
     comment += f"\nAvailability: {round(availability,1)}%"
     comment += f"\nStd Dev: {round(std_dev,2)}"
 
-    color = "red" if avg_dev < -2 else "orange" if avg_dev > 2 else "green"
-
-    fig.update_layout(
-        title=f"{t} | Dev: {round(avg_dev,1)}%",
-        title_font=dict(color=color),
-        height=350
-    )
-
-    cols[i%2].plotly_chart(fig,use_container_width=True)
+    cols[i%2].plotly_chart(fig, use_container_width=True)
     cols[i%2].markdown(f"```\n{comment}\n```")
     i+=1
 
-# TABLE
+# COLORED RANKING
 st.subheader("Ranking")
-st.dataframe(results_df.sort_values("Deviation_%"))
+
+def color_status(val):
+    if val == "Under":
+        return "background-color: red; color: white"
+    elif val == "Over":
+        return "background-color: orange; color: black"
+    else:
+        return "background-color: green; color: white"
+
+styled_df = results_df.sort_values("Deviation_%").style.applymap(
+    color_status, subset=["Status"]
+)
+
+st.dataframe(styled_df, use_container_width=True)
