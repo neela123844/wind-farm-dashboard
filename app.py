@@ -32,13 +32,14 @@ if uploaded_file is None:
 
 site = st.sidebar.selectbox(
     "Select Site for Reference Curve",
-    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki","CleanMax Motadevaliya",
-     "Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar","FP_Kudligi","Sprng TN","Otha Pithalpur-GJ",
-     "AMGEPL,Kurnool AP","ReNew1_Gadag","partner Ottapidaum","Cleanmax Motadevaliya","Cleanmax SANATHALI","Cleanmax Babra",
-     "RenfraEnergy Trichy","RENEW-03 Sholapur","Renew2 Chandwad","ReNew-4 Patoda","Clean max Jagalur","Sembcorp Tuticorin",
-     "Renew-4 Kudligi","Renew Otha","Cleanmax Honavad"," Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
+    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki",
+     "CleanMax Motadevaliya","Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar",
+     "FP_Kudligi","Sprng TN","Otha Pithalpur-GJ","AMGEPL,Kurnool AP","ReNew1_Gadag",
+     "partner Ottapidaum","Cleanmax SANATHALI","Cleanmax Babra","RenfraEnergy Trichy",
+     "RENEW-03 Sholapur","Renew2 Chandwad","ReNew-4 Patoda","Clean max Jagalur",
+     "Sembcorp Tuticorin","Renew-4 Kudligi","Renew Otha","Cleanmax Honavad",
+     "Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
 )
-
 
 # LOAD SCADA
 @st.cache_data
@@ -122,6 +123,13 @@ def process_turbine(t):
     if len(df_t)<30:
         return None
 
+    # DATA AVAILABILITY
+    expected_points = ((end_date - start_date).total_seconds() / 600)
+    availability = (len(df_t) / expected_points) * 100
+
+    # STD DEV CHECK
+    std_dev = df_t[power_col].std()
+
     df_t["WindBin"] = (df_t[wind_col]/BIN_SIZE).round()*BIN_SIZE
 
     actual = df_t.groupby("WindBin").agg(AvgPower=(power_col,"mean")).reset_index()
@@ -134,14 +142,24 @@ def process_turbine(t):
     merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
     avg_dev = merged["Deviation_%"].mean(skipna=True)
 
-    return df_t, merged, avg_dev
+    # STALL DETECTION (YOUR RULES)
+    stall_bins = merged[
+        (merged["WindBin"] >= 4) &
+        (merged["WindBin"] <= 10) &
+        (merged["Deviation_%"] <= -40) &
+        (merged["Deviation_%"] >= -72)
+    ]["WindBin"].tolist()
+
+    stall_flag = len(stall_bins) >= 3
+
+    return df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev
 
 # SUMMARY
 results=[]
 for t in df["Name"].unique():
     res = process_turbine(t)
     if res:
-        _,_,dev = res
+        _,_,dev,_,_,_,_ = res
         results.append({"Turbine":t,"Deviation_%":dev})
 
 results_df = pd.DataFrame(results)
@@ -149,28 +167,19 @@ results_df = pd.DataFrame(results)
 # STATUS
 def get_status(dev):
     if dev < -2:
-        return " Under"
+        return "Under"
     elif dev > 2:
-        return " Over"
+        return "Over"
     else:
-        return " Normal"
+        return "Normal"
 
 results_df["Status"] = results_df["Deviation_%"].apply(get_status)
 
 # HEADER
 st.subheader(f"{site} Performance ({start_date.date()} → {end_date.date()})")
 
-# BAR GRAPH WITH COLOR
-st.subheader("Deviation Overview")
-
-colors = []
-for d in results_df["Deviation_%"]:
-    if d < -2:
-        colors.append("red")
-    elif d > 2:
-        colors.append("orange")
-    else:
-        colors.append("green")
+# BAR GRAPH
+colors = ["red" if d < -2 else "orange" if d > 2 else "green" for d in results_df["Deviation_%"]]
 
 fig_bar = go.Figure()
 fig_bar.add_trace(go.Bar(
@@ -180,96 +189,61 @@ fig_bar.add_trace(go.Bar(
 ))
 st.plotly_chart(fig_bar, use_container_width=True)
 
-# MODE
-mode = st.radio("Mode", ["Single","Compare","All"])
+# ALL MODE (UPDATED INSIGHTS)
+st.subheader("All Turbine Analysis")
 
-# SINGLE
-if mode=="Single":
-    t = st.selectbox("Select Turbine", results_df["Turbine"])
-    df_f, merged, avg_dev = process_turbine(t)
+cols = st.columns(2)
+i=0
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_f[wind_col],y=df_f[power_col],mode='markers',name="SCADA"))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines+markers',name="Actual"))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],mode='lines',name="Reference"))
-    st.plotly_chart(fig,use_container_width=True)
-
-    st.subheader("Deviation vs Wind Speed")
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=merged["WindBin"],y=merged["Deviation_%"],mode='lines+markers'))
-    fig2.add_hline(y=0)
-    st.plotly_chart(fig2,use_container_width=True)
-
-# COMPARE
-elif mode=="Compare":
-    t1 = st.selectbox("T1", results_df["Turbine"])
-    t2 = st.selectbox("T2", results_df["Turbine"], index=1)
-
-    df1,m1,dev1 = process_turbine(t1)
-    df2,m2,dev2 = process_turbine(t2)
+for t in results_df["Turbine"]:
+    df_f, merged, avg_dev, stall_flag, stall_bins, availability, std_dev = process_turbine(t)
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=m1["WindBin"],y=m1["AvgPower"],name=t1))
-    fig.add_trace(go.Scatter(x=m2["WindBin"],y=m2["AvgPower"],name=t2))
-    fig.add_trace(go.Scatter(x=m1["WindBin"],y=m1["RefPower"],name="Reference",line=dict(dash='dash')))
-    st.plotly_chart(fig,use_container_width=True)
+    fig.add_trace(go.Scatter(x=df_f[wind_col],y=df_f[power_col],
+                             mode='markers',marker=dict(size=3,opacity=0.4)))
+    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines+markers'))
+    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],
+                             mode='lines',line=dict(dash='dash')))
 
-    better = t1 if dev1 > dev2 else t2
-    worse = t2 if better == t1 else t1
+    # COMMENT LOGIC
+    comment = ""
 
-    stall1 = m1[(m1["Deviation_%"] < -15) & (m1["WindBin"] < RATED_SPEED)]["WindBin"].tolist()
-    stall2 = m2[(m2["Deviation_%"] < -15) & (m2["WindBin"] < RATED_SPEED)]["WindBin"].tolist()
+    if avg_dev < -2:
+        comment += "Underperformance\n"
 
-    st.subheader("Comparison Insight")
-    st.write(f" {better} performs better than {worse}")
+        if stall_flag:
+            comment += f"- Stall detected at {stall_bins}\n"
 
-    st.write(f"{t1} → Dev: {round(dev1,2)}%")
-    if stall1:
-        st.write(f" Stalling at: {stall1}")
+        if std_dev < 1:
+            comment += "- Stable but low output (possible blade issue)\n"
 
-    st.write(f"{t2} → Dev: {round(dev2,2)}%")
-    if stall2:
-        st.write(f" Stalling at: {stall2}")
+        if availability < 95:
+            comment += "- Low data availability\n"
 
-# ALL
-else:
-    cols = st.columns(2)
-    i=0
+    elif avg_dev > 8:
+        comment += "High Overperformance (>8%)\n"
+        comment += "- Possible measurement issue\n- NTF\n- Sensor misalignment\n- IPC inactive\n"
 
-    for t in results_df["Turbine"]:
-        df_f, merged, avg_dev = process_turbine(t)
+    elif avg_dev > 2:
+        comment += "Slight Overperformance\n- Wind variation or sensor drift\n"
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_f[wind_col],y=df_f[power_col],
-                                 mode='markers',marker=dict(size=3,opacity=0.4)))
-        fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines+markers'))
-        fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],
-                                 mode='lines',line=dict(dash='dash')))
+    else:
+        comment += "Normal Performance\n"
 
-        stall = merged[(merged["Deviation_%"] < -15) & (merged["WindBin"] < RATED_SPEED)]["WindBin"].tolist()
+    comment += f"\nAvailability: {round(availability,1)}%"
+    comment += f"\nStd Dev: {round(std_dev,2)}"
 
-        if avg_dev < -2:
-            comment = "Underperformance\n- Low air density\n- Stalling\n- Blade issue"
-            color = "red"
-        elif avg_dev > 2:
-            comment = "Overperformance\n- Wind variation\n- Sensor issue"
-            color = "orange"
-        else:
-            comment = "Normal performance"
-            color = "green"
+    color = "red" if avg_dev < -2 else "orange" if avg_dev > 2 else "green"
 
-        if stall:
-            comment += f"\n Stalling at: {stall}"
+    fig.update_layout(
+        title=f"{t} | Dev: {round(avg_dev,1)}%",
+        title_font=dict(color=color),
+        height=350
+    )
 
-        fig.update_layout(
-            title=f"{t} | Dev: {round(avg_dev,1)}%",
-            title_font=dict(color=color),
-            height=350
-        )
-
-        cols[i%2].plotly_chart(fig,use_container_width=True)
-        cols[i%2].markdown(f"```\n{comment}\n```")
-        i+=1
+    cols[i%2].plotly_chart(fig,use_container_width=True)
+    cols[i%2].markdown(f"```\n{comment}\n```")
+    i+=1
 
 # TABLE
 st.subheader("Ranking")
