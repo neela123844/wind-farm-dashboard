@@ -134,15 +134,14 @@ def process_turbine(t):
     merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
     avg_dev = merged["Deviation_%"].mean(skipna=True)
 
-    # -------- STALL --------
     stall_df = merged[
         (merged["WindBin"]>=4)&(merged["WindBin"]<=10)&
         (merged["Deviation_%"]<=-40)&(merged["Deviation_%"]>=-72)
     ]
+
     stall_bins = stall_df["WindBin"].tolist()
     stall_flag = (len(stall_bins)>=3) and (availability>=99) and (std_dev<1)
 
-    # -------- DERATING --------
     derating_flag = False
     derating_sources = []
 
@@ -151,39 +150,9 @@ def process_turbine(t):
             derating_flag = True
             derating_sources.append(col)
 
-    # -------- MEASUREMENT --------
     measurement_flag = len(df_t[(df_t[wind_col]<4)&(df_t[power_col]>0.2*RATED_POWER)]) > 10
 
-    # -------- ROOT CAUSE ANALYSIS --------
-    cause = []
-
-    # Underperformance causes
-    if avg_dev < -2:
-        low_power_high_wind = len(df_t[(df_t[wind_col]>8)&(df_t[power_col]<0.5*RATED_POWER)]) > 20
-        mid_wind_drop = len(merged[(merged["WindBin"]>=5)&(merged["WindBin"]<=9)&(merged["Deviation_%"]<-20)]) > 3
-
-        if low_power_high_wind:
-            cause.append("Yaw misalignment / wind direction issue")
-
-        if mid_wind_drop:
-            cause.append("Blade / Pitch control issue")
-
-        if derating_flag:
-            cause.append("Active derating (thermal/curtailment)")
-
-        if not cause:
-            cause.append("General aerodynamic inefficiency")
-
-    # Overperformance causes
-    if avg_dev > 8:
-        cause.append("Wind sensor under-reading")
-        cause.append("IPC not active")
-        cause.append("NTF condition")
-
-    if measurement_flag:
-        cause.append("Wind sensor or power measurement error")
-
-    return df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, derating_sources, measurement_flag, cause
+    return df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, derating_sources, measurement_flag
 
 # ---------------- SUMMARY ----------------
 results = []
@@ -193,39 +162,78 @@ for t in df["Name"].unique():
     if not res:
         continue
 
-    df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, derating_sources, measurement_flag, cause = res
+    df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, derating_sources, measurement_flag = res
 
+    # -------- COMMENT ENGINE (ADVANCED ROOT-CAUSE) --------
     comment = ""
 
     if stall_flag:
         comment += " STALL DETECTED\n"
-        comment += f"Bins: {stall_bins}\n"
+        comment += "• Wind: 4–10 m/s\n"
+        comment += "• Deviation: -40% to -72%\n"
+        comment += f"• Bins: {stall_bins}\n"
+
+        if derating_flag:
+            comment += f"•  Caused by DERATING ({', '.join(derating_sources)})\n"
+        else:
+            comment += "• Possible causes:\n"
+            comment += "  - Blade aerodynamic issue\n"
+            comment += "  - Pitch system issue\n"
+            comment += "  - IPC inactive\n"
+            comment += "  - Control tuning issue\n"
 
     elif avg_dev < -2:
         comment += " UNDERPERFORMANCE\n"
 
-    elif avg_dev > 8:
-        comment += " HIGH OVERPERFORMANCE\n"
+        if derating_flag:
+            comment += f"• Cause: DERATING ACTIVE ({', '.join(derating_sources)})\n"
 
-    else:
-        comment += " NORMAL\n"
+        elif std_dev < 1:
+            comment += "• Stable low output → Possible aerodynamic / blade issue\n"
 
-    # Add causes
-    if cause:
-        comment += "\nRoot Cause:\n"
-        for c in cause:
-            comment += f"• {c}\n"
+        elif availability < 95:
+            comment += "• Low availability → Possible downtime / frequent stops\n"
+
+        else:
+            comment += "• Possible causes:\n"
+            comment += "  - Yaw misalignment\n"
+            comment += "  - Blade degradation\n"
+            comment += "  - Pitch angle deviation\n"
+            comment += "  - Wind measurement mismatch\n"
+
+    if avg_dev > 8:
+        comment += "\n HIGH OVERPERFORMANCE\n"
+
+        if measurement_flag:
+            comment += "• Cause: Wind measurement issue (sensor error)\n"
+
+        elif std_dev > 5:
+            comment += "• High fluctuation → Sensor inconsistency\n"
+
+        else:
+            comment += "• Possible causes:\n"
+            comment += "  - Sensor misalignment\n"
+            comment += "  - IPC inactive\n"
+            comment += "  - NTF condition\n"
+
+    elif avg_dev > 2:
+        comment += "\n SLIGHT OVERPERFORMANCE\n"
+        comment += "• Slight deviation above reference\n"
+
+    if -TOLERANCE <= avg_dev <= TOLERANCE:
+        comment += "\n NORMAL PERFORMANCE\n"
 
     if derating_flag:
-        comment += f"\n DERATING: {', '.join(derating_sources)}"
+        comment += f"\n DERATING ACTIVE: {', '.join(derating_sources)}"
+        comment += "\n• Triggered due to temp / curtailment / control limits\n"
 
     if measurement_flag:
-        comment += "\n Measurement issue"
+        comment += "\n MEASUREMENT ISSUE DETECTED\n"
+        comment += "• Power observed at low wind speeds (<4 m/s)\n"
 
     comment += f"\nAvailability: {round(availability,1)}%"
     comment += f"\nStd Dev: {round(std_dev,2)}"
 
-    # Status
     if stall_flag:
         status = "STALL"
     elif avg_dev < -2:
@@ -255,6 +263,39 @@ fig_bar.add_trace(go.Bar(
 ))
 
 st.plotly_chart(fig_bar, use_container_width=True)
+
+# ---------------- GRAPHS ----------------
+st.subheader("Turbine Analysis")
+
+cols = st.columns(2)
+i = 0
+
+for idx, row in results_df.iterrows():
+    t = row["Turbine"]
+    comment = row["Remarks"]
+
+    res = process_turbine(t)
+    if not res:
+        continue
+
+    df_t, merged, avg_dev, *_ = res
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_t[wind_col], y=df_t[power_col],
+                             mode='markers', marker=dict(size=3, opacity=0.4)))
+
+    fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["AvgPower"],
+                             mode='lines+markers'))
+
+    fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["RefPower"],
+                             mode='lines', line=dict(dash='dash')))
+
+    fig.update_layout(title=f"{t} | Dev: {round(avg_dev,1)}%", height=350)
+
+    cols[i % 2].plotly_chart(fig, use_container_width=True)
+    cols[i % 2].markdown(f"```\n{comment}\n```")
+
+    i += 1
 
 # ---------------- TABLE ----------------
 st.subheader("Ranking")
