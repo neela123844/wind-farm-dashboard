@@ -164,31 +164,51 @@ for t in df["Name"].unique():
 
     df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, derating_sources, measurement_flag = res
 
+    # -------- SMART COMMENT ENGINE --------
     comment = ""
 
     if stall_flag:
-        comment += " STALL DETECTED\n"
+        comment += "🔴 STALL DETECTED\n"
+        comment += "• Wind range: 4–10 m/s\n"
+        comment += f"• Affected bins: {stall_bins}\n"
+
+        if derating_flag:
+            comment += f"• Root cause: DERATING ({', '.join(derating_sources)})\n"
+        elif std_dev < 1:
+            comment += "• Stable low output → Blade/Pitch/IPC issue\n"
+        else:
+            comment += "• Possible: Control tuning / aerodynamic issue\n"
+
     elif avg_dev < -2:
-        comment += " UNDERPERFORMANCE\n"
+        comment += "🔴 UNDERPERFORMANCE\n"
+
+        if derating_flag:
+            comment += f"• Cause: DERATING ACTIVE ({', '.join(derating_sources)})\n"
+        elif availability < 95:
+            comment += "• Cause: Low availability → downtime\n"
+        elif std_dev < 1:
+            comment += "• Cause: Stable low output → Blade issue\n"
+        else:
+            comment += "• Possible: Yaw misalignment / pitch deviation\n"
 
     if avg_dev > 8:
-        comment += "\n HIGH OVERPERFORMANCE\n"
+        comment += "\n🟠 HIGH OVERPERFORMANCE\n"
         comment += "Measurement issue\n"
         comment += "o NTF\n"
         comment += "o Sensor alignment\n"
         comment += "o IPC sensor not active\n"
 
     elif avg_dev > 2:
-        comment += "\n SLIGHT OVERPERFORMANCE\n"
+        comment += "\n🟠 SLIGHT OVERPERFORMANCE\n"
 
     if -TOLERANCE <= avg_dev <= TOLERANCE:
-        comment += "\n NORMAL PERFORMANCE\n"
+        comment += "\n🟢 NORMAL PERFORMANCE\n"
 
     if derating_flag:
-        comment += f"\n DERATING ACTIVE: {', '.join(derating_sources)}"
+        comment += f"\n⚠️ DERATING ACTIVE: {', '.join(derating_sources)}"
 
     if measurement_flag:
-        comment += "\n MEASUREMENT ISSUE (low wind high power)"
+        comment += "\n⚠️ MEASUREMENT ISSUE (low wind high power)"
 
     comment += f"\nAvailability: {round(availability,1)}%"
     comment += f"\nStd Dev: {round(std_dev,2)}"
@@ -242,13 +262,13 @@ for idx, row in results_df.iterrows():
     fig = go.Figure()
 
     fig.add_trace(go.Scatter(x=df_t[wind_col], y=df_t[power_col],
-                             mode='markers', marker=dict(size=3, opacity=0.4), name="Actual"))
+                             mode='markers', marker=dict(size=3, opacity=0.4)))
 
     fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["AvgPower"],
-                             mode='lines+markers', name="Actual Curve"))
+                             mode='lines+markers'))
 
     fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["RefPower"],
-                             mode='lines', line=dict(dash='dash'), name="Reference"))
+                             mode='lines', line=dict(dash='dash')))
 
     fig.update_layout(title=f"{t} | Dev: {round(avg_dev,1)}%", height=350)
 
