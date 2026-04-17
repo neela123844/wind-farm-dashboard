@@ -164,12 +164,10 @@ for t in df["Name"].unique():
 
     df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, derating_sources, measurement_flag = res
 
-    # -------- COMMENT ENGINE --------
     comment = ""
 
     if stall_flag:
         comment += " STALL DETECTED\n"
-
     elif avg_dev < -2:
         comment += " UNDERPERFORMANCE\n"
 
@@ -213,7 +211,7 @@ for t in df["Name"].unique():
 
 results_df = pd.DataFrame(results)
 
-# ---------------- CUSTOM SORT ----------------
+# ---------------- SORT ----------------
 order = {"NORMAL":0, "OVER":1, "UNDER":2, "STALL":3}
 results_df["order"] = results_df["Status"].map(order)
 results_df = results_df.sort_values("order").drop(columns=["order"])
@@ -222,13 +220,42 @@ results_df = results_df.sort_values("order").drop(columns=["order"])
 colors = ["red" if d < -2 else "orange" if d > 2 else "green" for d in results_df["Deviation_%"]]
 
 fig_bar = go.Figure()
-fig_bar.add_trace(go.Bar(
-    x=results_df["Turbine"],
-    y=results_df["Deviation_%"],
-    marker_color=colors
-))
-
+fig_bar.add_trace(go.Bar(x=results_df["Turbine"], y=results_df["Deviation_%"], marker_color=colors))
 st.plotly_chart(fig_bar, use_container_width=True)
+
+# ---------------- GRAPHS ----------------
+st.subheader("Turbine Analysis")
+
+cols = st.columns(2)
+i = 0
+
+for idx, row in results_df.iterrows():
+    t = row["Turbine"]
+    comment = row["Remarks"]
+
+    res = process_turbine(t)
+    if not res:
+        continue
+
+    df_t, merged, avg_dev, *_ = res
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Scatter(x=df_t[wind_col], y=df_t[power_col],
+                             mode='markers', marker=dict(size=3, opacity=0.4), name="Actual"))
+
+    fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["AvgPower"],
+                             mode='lines+markers', name="Actual Curve"))
+
+    fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["RefPower"],
+                             mode='lines', line=dict(dash='dash'), name="Reference"))
+
+    fig.update_layout(title=f"{t} | Dev: {round(avg_dev,1)}%", height=350)
+
+    cols[i % 2].plotly_chart(fig, use_container_width=True)
+    cols[i % 2].markdown(f"```\n{comment}\n```")
+
+    i += 1
 
 # ---------------- TABLE ----------------
 st.subheader("Ranking")
