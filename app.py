@@ -34,7 +34,6 @@ site = st.sidebar.selectbox(
     ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2"]
 )
 
-# ---------------- DISPLAY MODE ----------------
 mode = st.sidebar.radio(
     "Select View",
     ["Single Turbine", "Compare Turbines", "Show All Turbines"]
@@ -67,7 +66,7 @@ end_date = df[time_col].max()
 start_date = end_date - timedelta(days=15 if period=="Last 15 Days" else 7 if period=="Weekly" else 30)
 df = df[(df[time_col]>=start_date)&(df[time_col]<=end_date)]
 
-# REFERENCE
+# LOAD REFERENCE
 @st.cache_data
 def load_reference(site):
     ref_raw = pd.read_excel(REF_FILE, header=None)
@@ -113,19 +112,29 @@ def process_turbine(t):
     merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
     avg_dev = merged["Deviation_%"].mean(skipna=True)
 
-    return df_t, merged, avg_dev, availability, std_dev
+    # Stall detection
+    stall_bins = merged[(merged["Deviation_%"]<=-40)&(merged["Deviation_%"]>=-72)]["WindBin"].tolist()
+    stall_flag = len(stall_bins) >= 3
+
+    # Derating detection
+    derating_flag = False
+    for col in df_t.columns:
+        if any(x in col.lower() for x in ["derate","limit","curtail","temp","pitch"]):
+            if df_t[col].astype(str).str.contains("derat|limit|curtail|temp|pitch", case=False, na=False).any():
+                derating_flag = True
+
+    return df_t, merged, avg_dev, availability, std_dev, stall_flag, stall_bins, derating_flag
 
 # SUMMARY
 results=[]
 for t in df["Name"].unique():
     res = process_turbine(t)
     if res:
-        _,_,dev,_,_ = res
+        _,_,dev,_,_,_,_,_ = res
         results.append({"Turbine":t,"Deviation_%":dev})
 
 results_df = pd.DataFrame(results)
 
-# STATUS
 def get_status(dev):
     if dev < -2: return "Under"
     elif dev > 2: return "Over"
@@ -133,26 +142,33 @@ def get_status(dev):
 
 results_df["Status"] = results_df["Deviation_%"].apply(get_status)
 
-# SORT ORDER
 order = {"Normal":0,"Under":1,"Over":2}
 results_df["order"] = results_df["Status"].map(order)
 results_df = results_df.sort_values("order")
 
+# GRAPH FUNCTION
+def plot_graph(df_t, merged, title):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],
+                             mode='markers',name="SCADA",marker=dict(size=3,opacity=0.4)))
+    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],
+                             mode='lines+markers',name="Actual"))
+    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],
+                             mode='lines',line=dict(dash='dash'),name="Reference"))
+    fig.update_layout(title=title)
+    return fig
+
 # ================= SINGLE =================
 if mode=="Single Turbine":
     t = st.selectbox("Select Turbine", results_df["Turbine"])
-    df_t, merged, dev, avail, std = process_turbine(t)
+    df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = process_turbine(t)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],mode='markers'))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines'))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],mode='lines',line=dict(dash='dash')))
-    st.plotly_chart(fig,use_container_width=True)
+    st.plotly_chart(plot_graph(df_t, merged, t), use_container_width=True)
 
     st.write(f"Deviation: {round(dev,2)}%")
     st.write(f"Std Dev %: {round((std/RATED_POWER)*100,2)}%")
 
-# ================= COMPARISON =================
+# ================= COMPARE =================
 elif mode=="Compare Turbines":
     t1 = st.selectbox("Turbine 1", results_df["Turbine"])
     t2 = st.selectbox("Turbine 2", results_df["Turbine"], key="t2")
@@ -160,20 +176,34 @@ elif mode=="Compare Turbines":
     r1 = process_turbine(t1)
     r2 = process_turbine(t2)
 
-    df1,m1,d1,a1,s1 = r1
-    df2,m2,d2,a2,s2 = r2
+    df1,m1,d1,_,s1,_,_,_ = r1
+    df2,m2,d2,_,s2,_,_,_ = r2
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=m1["WindBin"],y=m1["AvgPower"],name=t1))
     fig.add_trace(go.Scatter(x=m2["WindBin"],y=m2["AvgPower"],name=t2))
-    fig.add_trace(go.Scatter(x=ref_curve["WindBin"],y=ref_curve["RefPower"],line=dict(dash='dash'),name="Ref"))
+    fig.add_trace(go.Scatter(x=ref_curve["WindBin"],y=ref_curve["RefPower"],
+                             line=dict(dash='dash'),name="Reference"))
+
     st.plotly_chart(fig,use_container_width=True)
 
     better = t1 if d1>d2 else t2
-    worse = t2 if d1>d2 else t1
 
-    st.markdown(f"""
-    """)
+    st.code(f"""
+Better Turbine: {better}
+
+Deviation:
+{t1}: {round(d1,2)}%
+{t2}: {round(d2,2)}%
+
+Reason:
+- Higher deviation = better performance
+- Lower turbine may have yaw/pitch/control issue
+
+Std Dev %:
+{t1}: {round((s1/RATED_POWER)*100,2)}%
+{t2}: {round((s2/RATED_POWER)*100,2)}%
+""")
 
 # ================= ALL =================
 else:
@@ -183,27 +213,26 @@ else:
     i=0
 
     for t in results_df["Turbine"]:
-        df_t, merged, dev, avail, std = process_turbine(t)
+        df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = process_turbine(t)
 
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],mode='markers'))
-        fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines'))
-        fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],mode='lines',line=dict(dash='dash')))
+        comment = f"Status: {get_status(dev)}\nDeviation: {round(dev,2)}%\nStd Dev %: {round((std/RATED_POWER)*100,2)}%\n"
 
-        comment=f"""
-Deviation: {round(dev,2)}%
-Std Dev %: {round((std/RATED_POWER)*100,2)}%
+        if stall_flag:
+            comment += f"\nSTALL DETECTED at bins {stall_bins}\n"
 
-Reason:
-- Deviation shows performance gap
-- Std dev shows stability
-"""
+        if derating_flag:
+            comment += "\nDERATING ACTIVE\n"
+
+        if dev > 8:
+            comment += "\nHIGH OVERPERFORMANCE:\n- Measurement issue\n- NTF\n- Sensor alignment\n- IPC inactive\n"
+
+        fig = plot_graph(df_t, merged, t)
 
         cols[i%2].plotly_chart(fig,use_container_width=True)
         cols[i%2].markdown(f"```\n{comment}\n```")
         i+=1
 
-# TABLE COLOR
+# TABLE
 def color_row(row):
     if row["Status"]=="Normal": return ['background-color:lightgreen']*len(row)
     elif row["Status"]=="Under": return ['background-color:orange']*len(row)
