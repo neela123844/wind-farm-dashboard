@@ -8,24 +8,22 @@ import os
 
 st.set_page_config(layout="wide")
 
-# ---------------- LOGO ----------------
+# LOGO
 logo_path = os.path.join(os.path.dirname(__file__), "Envision.png")
-if os.path.exists(logo_path):
-    col1, col2, col3 = st.columns([1,2,1])
-    with col2:
-        st.image(logo_path, width=300)
+col1, col2, col3 = st.columns([1,2,1])
+with col2:
+    st.image(logo_path, width=300)
 
 st.title("Wind Farm Performance Analytics Dashboard")
 
-# ---------------- FILE ----------------
-REF_FILE = os.path.join(os.path.dirname(__file__),
-                       "India site Standard & Theoretical PC data 1234.xlsx")
+REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
 
 BIN_SIZE = 0.5
 TOLERANCE = 2.0
+RATED_SPEED = 10.0
 RATED_POWER = 3400.0
 
-# ---------------- SIDEBAR ----------------
+# SIDEBAR
 uploaded_file = st.sidebar.file_uploader("Upload SCADA CSV", type=["csv"])
 
 if uploaded_file is None:
@@ -33,12 +31,17 @@ if uploaded_file is None:
     st.stop()
 
 site = st.sidebar.selectbox(
-    "Select Site",
-    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2",
-     "AMP_Energy","Wanki","CleanMax Motadevaliya","Ayana Amerli"]
+    "Select Site for Reference Curve",
+    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki",
+     "CleanMax Motadevaliya","Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar",
+     "FP_Kudligi","Sprng TN","Otha Pithalpur-GJ","AMGEPL,Kurnool AP","ReNew1_Gadag",
+     "partner Ottapidaum","Cleanmax SANATHALI","Cleanmax Babra","RenfraEnergy Trichy",
+     "RENEW-03 Sholapur","Renew2 Chandwad","ReNew-4 Patoda","Clean max Jagalur",
+     "Sembcorp Tuticorin","Renew-4 Kudligi","Renew Otha","Cleanmax Honavad",
+     "Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
 )
 
-# ---------------- LOAD SCADA ----------------
+# LOAD SCADA
 @st.cache_data
 def load_scada(file):
     df = pd.read_csv(file, low_memory=False)
@@ -52,17 +55,14 @@ def load_scada(file):
     df[wind_col] = pd.to_numeric(df[wind_col], errors="coerce")
     df[power_col] = pd.to_numeric(df[power_col], errors="coerce")
 
-    df = df.dropna(subset=[wind_col, power_col, time_col])
+    df = df.dropna(subset=[wind_col,power_col,time_col])
     df["Name"] = df["Name"].astype(str).str.strip()
 
-    status_cols = [c for c in df.columns if any(x in c.lower()
-                    for x in ["status","alarm","derate","limit","curtail","temp","pitch"])]
+    return df, wind_col, power_col, time_col
 
-    return df, wind_col, power_col, time_col, status_cols
+df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
-df, wind_col, power_col, time_col, status_cols = load_scada(uploaded_file)
-
-# ---------------- DATE FILTER ----------------
+# DATE FILTER
 period = st.sidebar.selectbox("Period", ["Last 15 Days","Weekly","Monthly"])
 end_date = df[time_col].max()
 
@@ -75,7 +75,7 @@ else:
 
 df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
 
-# ---------------- REFERENCE ----------------
+# LOAD REFERENCE
 @st.cache_data
 def load_reference(site):
     ref_raw = pd.read_excel(REF_FILE, header=None)
@@ -90,7 +90,7 @@ def load_reference(site):
             break
 
     if location is None:
-        st.error("Site not found in reference file")
+        st.error("Site not found")
         st.stop()
 
     r,c = location
@@ -98,21 +98,25 @@ def load_reference(site):
     ref = ref_raw.iloc[r+2:r+60,[c-1,c+3]].copy()
     ref.columns=["WindSpeed","RefPower"]
 
-    ref = ref.dropna()
-    ref["WindSpeed"] = pd.to_numeric(ref["WindSpeed"])
-    ref["RefPower"] = pd.to_numeric(ref["RefPower"])
+    ref["WindSpeed"] = pd.to_numeric(ref["WindSpeed"],errors="coerce")
+    ref["RefPower"] = pd.to_numeric(ref["RefPower"],errors="coerce")
+    ref = ref.dropna().sort_values("WindSpeed")
 
-    wind_bins = np.arange(3,25.5,BIN_SIZE)
-    ref_interp = np.interp(wind_bins, ref["WindSpeed"], ref["RefPower"])
+    wind_bins = np.arange(4,10,BIN_SIZE)
+
+    ref_interp = np.interp(
+        wind_bins,
+        ref["WindSpeed"].values,
+        ref["RefPower"].values
+    )
 
     return pd.DataFrame({"WindBin":wind_bins,"RefPower":ref_interp})
 
 ref_curve = load_reference(site)
 
-# ---------------- PROCESS ----------------
+# PROCESS
 def process_turbine(t):
     df_t = df[df["Name"]==t].copy()
-
     df_t = df_t[(df_t[wind_col]>=3)&(df_t[wind_col]<=25)&(df_t[power_col]>0)]
 
     if len(df_t)<30:
@@ -134,57 +138,113 @@ def process_turbine(t):
     merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
     avg_dev = merged["Deviation_%"].mean(skipna=True)
 
-    return df_t, merged, avg_dev
+    stall_bins = merged[
+        (merged["WindBin"] >= 4) &
+        (merged["WindBin"] <= 10) &
+        (merged["Deviation_%"] <= -40) &
+        (merged["Deviation_%"] >= -72)
+    ]["WindBin"].tolist()
 
-# ---------------- COMPARISON GRAPH ----------------
-st.subheader("Turbine Comparison (Single Graph)")
+    stall_flag = len(stall_bins) >= 3
 
-selected_turbines = st.multiselect(
-    "Select turbines to compare",
-    df["Name"].unique()
-)
+    return df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev
 
-if selected_turbines:
-    fig_compare = go.Figure()
+# SUMMARY
+results=[]
+for t in df["Name"].unique():
+    res = process_turbine(t)
+    if res:
+        _,_,dev,_,_,_,_ = res
+        results.append({"Turbine":t,"Deviation_%":dev})
 
-    # Reference curve (only once)
-    fig_compare.add_trace(go.Scatter(
-        x=ref_curve["WindBin"],
-        y=ref_curve["RefPower"],
-        mode='lines',
-        name='Reference',
-        line=dict(dash='dash', color='black')
-    ))
+results_df = pd.DataFrame(results)
 
-    for t in selected_turbines:
-        res = process_turbine(t)
-        if not res:
-            continue
+# STATUS
+def get_status(dev):
+    if dev < -2:
+        return "Under"
+    elif dev > 2:
+        return "Over"
+    else:
+        return "Normal"
 
-        df_t, merged, avg_dev = res
+results_df["Status"] = results_df["Deviation_%"].apply(get_status)
 
-        # Scatter
-        fig_compare.add_trace(go.Scatter(
-            x=df_t[wind_col],
-            y=df_t[power_col],
-            mode='markers',
-            name=f"{t} Raw",
-            opacity=0.3
-        ))
+# HEADER
+st.subheader(f"{site} Performance ({start_date.date()} → {end_date.date()})")
 
-        # Avg curve
-        fig_compare.add_trace(go.Scatter(
-            x=merged["WindBin"],
-            y=merged["AvgPower"],
-            mode='lines+markers',
-            name=f"{t} Avg"
-        ))
+# BAR GRAPH
+colors = ["red" if d < -2 else "orange" if d > 2 else "green" for d in results_df["Deviation_%"]]
+fig_bar = go.Figure()
+fig_bar.add_trace(go.Bar(x=results_df["Turbine"], y=results_df["Deviation_%"], marker_color=colors))
+st.plotly_chart(fig_bar, use_container_width=True)
 
-    fig_compare.update_layout(
-        height=500,
-        title="Turbine Comparison Curve",
-        xaxis_title="Wind Speed",
-        yaxis_title="Power"
-    )
+# -------- SINGLE TURBINE --------
+st.subheader("Single Turbine View")
+t_sel = st.selectbox("Select Turbine", results_df["Turbine"])
 
-    st.plotly_chart(fig_compare, use_container_width=True)
+if t_sel:
+    df_f, merged, avg_dev, *_ = process_turbine(t_sel)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_f[wind_col], y=df_f[power_col], mode='markers', marker=dict(size=3, opacity=0.4)))
+    fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["AvgPower"], mode='lines+markers', name="Actual"))
+    fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["RefPower"], mode='lines', line=dict(dash='dash'), name="Reference"))
+
+    st.plotly_chart(fig, use_container_width=True)
+
+# -------- COMPARISON --------
+st.subheader("Compare Two Turbines")
+
+t1 = st.selectbox("Turbine 1", results_df["Turbine"], key="c1")
+t2 = st.selectbox("Turbine 2", results_df["Turbine"], key="c2")
+
+if t1 and t2:
+    r1 = process_turbine(t1)
+    r2 = process_turbine(t2)
+
+    if r1 and r2:
+        df1, m1, d1, _, _, _, s1 = r1
+        df2, m2, d2, _, _, _, s2 = r2
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=m1["WindBin"], y=m1["AvgPower"], mode='lines+markers', name=t1))
+        fig.add_trace(go.Scatter(x=m2["WindBin"], y=m2["AvgPower"], mode='lines+markers', name=t2))
+        fig.add_trace(go.Scatter(x=ref_curve["WindBin"], y=ref_curve["RefPower"],
+                                 mode='lines', line=dict(dash='dash'), name="Reference"))
+
+        st.plotly_chart(fig, use_container_width=True)
+
+        # Percentile
+        stds = [process_turbine(t)[6] for t in results_df["Turbine"] if process_turbine(t)]
+        p1 = (sum(x <= s1 for x in stds)/len(stds))*100
+        p2 = (sum(x <= s2 for x in stds)/len(stds))*100
+
+        better = t1 if d1 > d2 else t2
+
+        st.markdown(f"""
+        """)
+
+# -------- ORIGINAL ALL TURBINES --------
+st.subheader("All Turbine Analysis")
+
+cols = st.columns(2)
+i=0
+
+for t in results_df["Turbine"]:
+    df_f, merged, avg_dev, stall_flag, stall_bins, availability, std_dev = process_turbine(t)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df_f[wind_col],y=df_f[power_col], mode='markers',marker=dict(size=3,opacity=0.4)))
+    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines+markers'))
+    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"], mode='lines',line=dict(dash='dash')))
+
+    comment = f"Dev: {round(avg_dev,1)}%\nAvailability: {round(availability,1)}%\nStd Dev: {round(std_dev,2)}"
+
+    cols[i%2].plotly_chart(fig,use_container_width=True)
+    cols[i%2].markdown(f"```\n{comment}\n```")
+    i+=1
+
+# TABLE
+st.subheader("Ranking")
+st.dataframe(results_df.sort_values("Deviation_%"))
