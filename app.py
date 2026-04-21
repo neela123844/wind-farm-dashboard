@@ -155,25 +155,21 @@ for t in df["Name"].unique():
     comment += f"Deviation: {round(dev,2)}%\n"
     comment += f"Std Dev %: {round((std/RATED_POWER)*100,2)}%\n"
 
-    # STALL
     if stall_flag:
         comment += f"\n🔴 Stall detected → bins {stall_bins}\n"
         comment += "Cause: Blade / pitch / aerodynamic issue\n"
 
-    # DERATING
     elif derating_flag:
-        comment += "\n⚠️ Derating active → turbine power limited\n"
+        comment += "\n Derating active → turbine power limited\n"
 
-    # UNDER
     elif dev < -2:
         if std < 1:
-            comment += "\n⚠️ Stable low output → blade/pitch issue\n"
+            comment += "\n Stable low output → blade/pitch issue\n"
         elif avail < 95:
-            comment += "\n⚠️ Low availability → downtime\n"
+            comment += "\n Low availability → downtime\n"
         else:
-            comment += "\n⚠️ Possible yaw misalignment / control issue\n"
+            comment += "\n Possible yaw misalignment / control issue\n"
 
-    # OVER (FIXED LOGIC)
     elif dev > 8:
         comment += "\n🟠 High overperformance\n"
 
@@ -186,7 +182,6 @@ for t in df["Name"].unique():
         else:
             comment += "Cause: NTF / calibration issue\n"
 
-    # SLIGHT OVER
     elif dev > 2:
         comment += "\n🟠 Slight overperformance → wind variation / sensor drift\n"
 
@@ -198,3 +193,49 @@ for t in df["Name"].unique():
     cols[i%2].plotly_chart(fig,use_container_width=True)
     cols[i%2].markdown(f"```\n{comment}\n```")
     i+=1
+
+
+# ================= RANKING TABLE =================
+results = []
+
+for t in df["Name"].unique():
+    res = process_turbine(t)
+    if not res:
+        continue
+
+    _, _, dev, _, std, _, _, _ = res
+
+    if dev < -2:
+        status = "Under"
+    elif dev > 2:
+        status = "Over"
+    else:
+        status = "Normal"
+
+    results.append({
+        "Turbine": t,
+        "Deviation_%": round(dev, 2),
+        "Std_Dev_%": round((std / RATED_POWER) * 100, 2),
+        "Status": status
+    })
+
+results_df = pd.DataFrame(results)
+
+order_map = {"Normal": 0, "Under": 1, "Over": 2}
+results_df["order"] = results_df["Status"].map(order_map)
+results_df = results_df.sort_values(["order", "Deviation_%"], ascending=[True, False]).drop(columns="order")
+
+def color_row(row):
+    if row["Status"] == "Normal":
+        return ['background-color: #99ff99'] * len(row)
+    elif row["Status"] == "Under":
+        return ['background-color: #ffcc66'] * len(row)
+    else:
+        return ['background-color: #ff6666'] * len(row)
+
+st.subheader("Turbine Ranking")
+
+st.dataframe(
+    results_df.style.apply(color_row, axis=1),
+    use_container_width=True
+)
