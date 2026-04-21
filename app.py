@@ -123,7 +123,7 @@ def process_turbine(t):
 
     return df_t, merged, avg_dev, availability, std_dev, stall_flag, stall_bins, derating_flag
 
-# GRAPH FUNCTION WITH COLOR
+# GRAPH
 def plot_graph(df_t, merged, title, dev):
     color = "green" if -2 <= dev <= 2 else "orange" if dev < -2 else "red"
 
@@ -155,26 +155,40 @@ for t in df["Name"].unique():
     comment += f"Deviation: {round(dev,2)}%\n"
     comment += f"Std Dev %: {round((std/RATED_POWER)*100,2)}%\n"
 
+    # STALL
     if stall_flag:
         comment += f"\n🔴 Stall detected → bins {stall_bins}\n"
+        comment += "Cause: Blade / pitch / aerodynamic issue\n"
 
+    # DERATING
     elif derating_flag:
-        comment += "\n⚠️ Derating active → power limited\n"
+        comment += "\n⚠️ Derating active → turbine power limited\n"
 
+    # UNDER
     elif dev < -2:
         if std < 1:
-            comment += "\n⚠️ Stable but low output → blade/pitch issue\n"
+            comment += "\n⚠️ Stable low output → blade/pitch issue\n"
+        elif avail < 95:
+            comment += "\n⚠️ Low availability → downtime\n"
         else:
             comment += "\n⚠️ Possible yaw misalignment / control issue\n"
 
+    # OVER (FIXED LOGIC)
     elif dev > 8:
-        comment += """
-\n🟠 High overperformance:
-- Measurement issue
-- NTF
-- Sensor misalignment
-- IPC inactive
-"""
+        comment += "\n🟠 High overperformance\n"
+
+        if std > 0.25 * RATED_POWER:
+            comment += "Cause: Measurement issue\n"
+        elif merged["AvgPower"].max() > RATED_POWER * 1.05:
+            comment += "Cause: Sensor misalignment\n"
+        elif std < 0.5:
+            comment += "Cause: IPC sensor not active\n"
+        else:
+            comment += "Cause: NTF / calibration issue\n"
+
+    # SLIGHT OVER
+    elif dev > 2:
+        comment += "\n🟠 Slight overperformance → wind variation / sensor drift\n"
 
     else:
         comment += "\n🟢 Normal performance\n"
