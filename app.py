@@ -134,162 +134,57 @@ def process_turbine(t):
     merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
     avg_dev = merged["Deviation_%"].mean(skipna=True)
 
-    stall_df = merged[
-        (merged["WindBin"]>=4)&(merged["WindBin"]<=10)&
-        (merged["Deviation_%"]<=-40)&(merged["Deviation_%"]>=-72)
-    ]
+    return df_t, merged, avg_dev
 
-    stall_bins = stall_df["WindBin"].tolist()
-    stall_flag = (len(stall_bins)>=3) and (availability>=99) and (std_dev<1)
+# ---------------- COMPARISON GRAPH ----------------
+st.subheader("Turbine Comparison (Single Graph)")
 
-    derating_flag = False
-    derating_sources = []
+selected_turbines = st.multiselect(
+    "Select turbines to compare",
+    df["Name"].unique()
+)
 
-    for col in status_cols:
-        if df_t[col].astype(str).str.contains("derat|limit|curtail|temp|pitch|overheat", case=False, na=False).any():
-            derating_flag = True
-            derating_sources.append(col)
+if selected_turbines:
+    fig_compare = go.Figure()
 
-    measurement_flag = len(df_t[(df_t[wind_col]<4)&(df_t[power_col]>0.2*RATED_POWER)]) > 10
+    # Reference curve (only once)
+    fig_compare.add_trace(go.Scatter(
+        x=ref_curve["WindBin"],
+        y=ref_curve["RefPower"],
+        mode='lines',
+        name='Reference',
+        line=dict(dash='dash', color='black')
+    ))
 
-    return df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, derating_sources, measurement_flag
+    for t in selected_turbines:
+        res = process_turbine(t)
+        if not res:
+            continue
 
-# ---------------- SUMMARY ----------------
-results = []
+        df_t, merged, avg_dev = res
 
-for t in df["Name"].unique():
-    res = process_turbine(t)
-    if not res:
-        continue
+        # Scatter
+        fig_compare.add_trace(go.Scatter(
+            x=df_t[wind_col],
+            y=df_t[power_col],
+            mode='markers',
+            name=f"{t} Raw",
+            opacity=0.3
+        ))
 
-    df_t, merged, avg_dev, stall_flag, stall_bins, availability, std_dev, derating_flag, derating_sources, measurement_flag = res
+        # Avg curve
+        fig_compare.add_trace(go.Scatter(
+            x=merged["WindBin"],
+            y=merged["AvgPower"],
+            mode='lines+markers',
+            name=f"{t} Avg"
+        ))
 
-    # -------- SMART COMMENT ENGINE --------
-    comment = ""
+    fig_compare.update_layout(
+        height=500,
+        title="Turbine Comparison Curve",
+        xaxis_title="Wind Speed",
+        yaxis_title="Power"
+    )
 
-    if stall_flag:
-        comment += "🔴 STALL DETECTED\n"
-        comment += "• Wind range: 4–10 m/s\n"
-        comment += f"• Affected bins: {stall_bins}\n"
-
-        if derating_flag:
-            comment += f"• Root cause: DERATING ({', '.join(derating_sources)})\n"
-        elif std_dev < 1:
-            comment += "• Stable low output → Blade/Pitch/IPC issue\n"
-        else:
-            comment += "• Possible: Control tuning / aerodynamic issue\n"
-
-    elif avg_dev < -2:
-        comment += "🔴 UNDERPERFORMANCE\n"
-
-        if derating_flag:
-            comment += f"• Cause: DERATING ACTIVE ({', '.join(derating_sources)})\n"
-        elif availability < 95:
-            comment += "• Cause: Low availability → downtime\n"
-        elif std_dev < 1:
-            comment += "• Cause: Stable low output → Blade issue\n"
-        else:
-            comment += "• Possible: Yaw misalignment / pitch deviation\n"
-
-    if avg_dev > 8:
-        comment += "\n🟠 HIGH OVERPERFORMANCE\n"
-        comment += "Measurement issue\n"
-        comment += "o NTF\n"
-        comment += "o Sensor alignment\n"
-        comment += "o IPC sensor not active\n"
-
-    elif avg_dev > 2:
-        comment += "\n🟠 SLIGHT OVERPERFORMANCE\n"
-
-    if -TOLERANCE <= avg_dev <= TOLERANCE:
-        comment += "\n🟢 NORMAL PERFORMANCE\n"
-
-    if derating_flag:
-        comment += f"\n⚠️ DERATING ACTIVE: {', '.join(derating_sources)}"
-
-    if measurement_flag:
-        comment += "\n⚠️ MEASUREMENT ISSUE (low wind high power)"
-
-    comment += f"\nAvailability: {round(availability,1)}%"
-    comment += f"\nStd Dev: {round(std_dev,2)}"
-
-    if stall_flag:
-        status = "STALL"
-    elif avg_dev < -2:
-        status = "UNDER"
-    elif avg_dev > 8:
-        status = "OVER"
-    else:
-        status = "NORMAL"
-
-    results.append({
-        "Turbine": t,
-        "Deviation_%": avg_dev,
-        "Status": status,
-        "Remarks": comment
-    })
-
-results_df = pd.DataFrame(results)
-
-# ---------------- SORT ----------------
-order = {"NORMAL":0, "OVER":1, "UNDER":2, "STALL":3}
-results_df["order"] = results_df["Status"].map(order)
-results_df = results_df.sort_values("order").drop(columns=["order"])
-
-# ---------------- BAR ----------------
-colors = ["red" if d < -2 else "orange" if d > 2 else "green" for d in results_df["Deviation_%"]]
-
-fig_bar = go.Figure()
-fig_bar.add_trace(go.Bar(x=results_df["Turbine"], y=results_df["Deviation_%"], marker_color=colors))
-st.plotly_chart(fig_bar, use_container_width=True)
-
-# ---------------- GRAPHS ----------------
-st.subheader("Turbine Analysis")
-
-cols = st.columns(2)
-i = 0
-
-for idx, row in results_df.iterrows():
-    t = row["Turbine"]
-    comment = row["Remarks"]
-
-    res = process_turbine(t)
-    if not res:
-        continue
-
-    df_t, merged, avg_dev, *_ = res
-
-    fig = go.Figure()
-
-    fig.add_trace(go.Scatter(x=df_t[wind_col], y=df_t[power_col],
-                             mode='markers', marker=dict(size=3, opacity=0.4)))
-
-    fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["AvgPower"],
-                             mode='lines+markers'))
-
-    fig.add_trace(go.Scatter(x=merged["WindBin"], y=merged["RefPower"],
-                             mode='lines', line=dict(dash='dash')))
-
-    fig.update_layout(title=f"{t} | Dev: {round(avg_dev,1)}%", height=350)
-
-    cols[i % 2].plotly_chart(fig, use_container_width=True)
-    cols[i % 2].markdown(f"```\n{comment}\n```")
-
-    i += 1
-
-# ---------------- TABLE ----------------
-st.subheader("Ranking")
-
-def color_rows(row):
-    if row["Status"] == "STALL":
-        return ['background-color: #ff4d4d'] * len(row)
-    elif row["Status"] == "UNDER":
-        return ['background-color: #ff9999'] * len(row)
-    elif row["Status"] == "OVER":
-        return ['background-color: #ffcc66'] * len(row)
-    else:
-        return ['background-color: #99ff99'] * len(row)
-
-styled_df = results_df.style.apply(color_rows, axis=1)
-
-st.dataframe(styled_df, use_container_width=True)
+    st.plotly_chart(fig_compare, use_container_width=True)
