@@ -173,3 +173,41 @@ elif mode=="Compare Turbines":
     worse = t2 if d1>d2 else t1
 
     st.markdown(f"""
+    """)
+
+# ================= ALL =================
+else:
+    st.subheader("All Turbines")
+
+    cols = st.columns(2)
+    i=0
+
+    for t in results_df["Turbine"]:
+        df_t, merged, dev, avail, std = process_turbine(t)
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],mode='markers'))
+        fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines'))
+        fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],mode='lines',line=dict(dash='dash')))
+
+        comment=f"""
+Deviation: {round(dev,2)}%
+Std Dev %: {round((std/RATED_POWER)*100,2)}%
+
+Reason:
+- Deviation shows performance gap
+- Std dev shows stability
+"""
+
+        cols[i%2].plotly_chart(fig,use_container_width=True)
+        cols[i%2].markdown(f"```\n{comment}\n```")
+        i+=1
+
+# TABLE COLOR
+def color_row(row):
+    if row["Status"]=="Normal": return ['background-color:lightgreen']*len(row)
+    elif row["Status"]=="Under": return ['background-color:orange']*len(row)
+    else: return ['background-color:red']*len(row)
+
+st.subheader("Ranking")
+st.dataframe(results_df.drop(columns="order").style.apply(color_row,axis=1))
