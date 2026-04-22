@@ -138,64 +138,88 @@ def plot_graph(df_t, merged, title, dev):
     fig.update_layout(title=dict(text=title, font=dict(color=color)))
     return fig
 
-# ================= ALL =================
-st.subheader("All Turbines")
-
-cols = st.columns(2)
-i=0
-
-for t in df["Name"].unique():
-    res = process_turbine(t)
-    if not res:
-        continue
-
-    df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
-
+# COMMENT FUNCTION
+def generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag):
     comment = f"Status: {'Normal' if -2<=dev<=2 else 'Under' if dev<-2 else 'Over'}\n"
     comment += f"Deviation: {round(dev,2)}%\n"
     comment += f"Std Dev %: {round((std/RATED_POWER)*100,2)}%\n"
 
     if stall_flag:
         comment += f"\n🔴 Stall detected → bins {stall_bins}\n"
-        comment += "Cause: Blade / pitch / aerodynamic issue\n"
-
     elif derating_flag:
-        comment += "\n Derating active → turbine power limited\n"
-
+        comment += "\nDerating active\n"
     elif dev < -2:
-        if std < 1:
-            comment += "\n Stable low output → blade/pitch issue\n"
-        elif avail < 95:
-            comment += "\n Low availability → downtime\n"
-        else:
-            comment += "\n Possible yaw misalignment / control issue\n"
-
-    elif dev > 8:
-        comment += "\n🟠 High overperformance\n"
-
-        if std > 0.25 * RATED_POWER:
-            comment += "Cause: Measurement issue\n"
-        elif merged["AvgPower"].max() > RATED_POWER * 1.05:
-            comment += "Cause: Sensor misalignment\n"
-        elif std < 0.5:
-            comment += "Cause: IPC sensor not active\n"
-        else:
-            comment += "Cause: NTF / calibration issue\n"
-
+        comment += "\nUnderperformance detected\n"
     elif dev > 2:
-        comment += "\n🟠 Slight overperformance → wind variation / sensor drift\n"
-
+        comment += "\nOverperformance detected\n"
     else:
-        comment += "\n🟢 Normal performance\n"
+        comment += "\nNormal performance\n"
 
-    fig = plot_graph(df_t, merged, f"{t} | Dev {round(dev,1)}%", dev)
+    return comment
 
-    cols[i%2].plotly_chart(fig,use_container_width=True)
-    cols[i%2].markdown(f"```\n{comment}\n```")
-    i+=1
+# ================= SINGLE =================
+if mode == "Single Turbine":
+    st.subheader("Single Turbine Analysis")
 
+    turbine = st.selectbox("Select Turbine", df["Name"].unique())
 
-# ================= RANKING TABLE =================
+    res = process_turbine(turbine)
+    if res:
+        df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
+
+        fig = plot_graph(df_t, merged, f"{turbine} | Dev {round(dev,1)}%", dev)
+        st.plotly_chart(fig, use_container_width=True)
+
+        comment = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
+        st.code(comment)
+
+# ================= COMPARE =================
+elif mode == "Compare Turbines":
+    st.subheader("Compare Turbines")
+
+    turbines = st.multiselect("Select Turbines", df["Name"].unique())
+
+    cols = st.columns(2)
+    i = 0
+
+    for t in turbines:
+        res = process_turbine(t)
+        if not res:
+            continue
+
+        df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
+
+        fig = plot_graph(df_t, merged, f"{t} | Dev {round(dev,1)}%", dev)
+        comment = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
+
+        cols[i%2].plotly_chart(fig, use_container_width=True)
+        cols[i%2].code(comment)
+        i += 1
+
+# ================= ALL =================
+else:
+    st.subheader("All Turbines")
+
+    cols = st.columns(2)
+    i=0
+
+    for t in df["Name"].unique():
+        res = process_turbine(t)
+        if not res:
+            continue
+
+        df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
+
+        fig = plot_graph(df_t, merged, f"{t} | Dev {round(dev,1)}%", dev)
+        comment = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
+
+        cols[i%2].plotly_chart(fig,use_container_width=True)
+        cols[i%2].code(comment)
+        i+=1
+
+# ================= TABLE =================
+st.subheader("Turbine Ranking")
+
 results = []
 
 for t in df["Name"].unique():
@@ -205,12 +229,7 @@ for t in df["Name"].unique():
 
     _, _, dev, _, std, _, _, _ = res
 
-    if dev < -2:
-        status = "Under"
-    elif dev > 2:
-        status = "Over"
-    else:
-        status = "Normal"
+    status = "Normal" if -2<=dev<=2 else "Under" if dev<-2 else "Over"
 
     results.append({
         "Turbine": t,
@@ -221,21 +240,4 @@ for t in df["Name"].unique():
 
 results_df = pd.DataFrame(results)
 
-order_map = {"Normal": 0, "Under": 1, "Over": 2}
-results_df["order"] = results_df["Status"].map(order_map)
-results_df = results_df.sort_values(["order", "Deviation_%"], ascending=[True, False]).drop(columns="order")
-
-def color_row(row):
-    if row["Status"] == "Normal":
-        return ['background-color: #99ff99'] * len(row)
-    elif row["Status"] == "Under":
-        return ['background-color: #ffcc66'] * len(row)
-    else:
-        return ['background-color: #ff6666'] * len(row)
-
-st.subheader("Turbine Ranking")
-
-st.dataframe(
-    results_df.style.apply(color_row, axis=1),
-    use_container_width=True
-)
+st.dataframe(results_df, use_container_width=True)
