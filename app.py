@@ -148,21 +148,64 @@ def plot_graph(df_t, merged, title, dev):
 def generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag):
     if stall_flag:
         return "Stall issue detected", "Stall"
-
     elif derating_flag:
         return "Derating detected", "Derating"
-
     elif dev < -2:
         return "Underperformance", "Underperformance"
-
     elif dev > 8:
         return "High overperformance", "Overperformance"
-
     elif dev > 2:
         return "Slight overperformance", "Overperformance"
-
     else:
         return "Normal", "Normal"
+
+# ================= GRAPH SECTIONS =================
+if mode == "Single Turbine":
+    turbine = st.selectbox("Select Turbine", df["Name"].unique())
+    res = process_turbine(turbine)
+
+    if res:
+        df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
+        fig = plot_graph(df_t, merged, turbine, dev)
+        st.plotly_chart(fig, use_container_width=True)
+
+        comment, _ = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
+        st.code(comment)
+
+elif mode == "Compare Turbines":
+    turbines = st.multiselect("Select Turbines", df["Name"].unique())
+    cols = st.columns(2)
+    i = 0
+
+    for t in turbines:
+        res = process_turbine(t)
+        if not res:
+            continue
+
+        df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
+        fig = plot_graph(df_t, merged, t, dev)
+        comment, _ = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
+
+        cols[i%2].plotly_chart(fig, use_container_width=True)
+        cols[i%2].code(comment)
+        i += 1
+
+else:
+    cols = st.columns(2)
+    i = 0
+
+    for t in df["Name"].unique():
+        res = process_turbine(t)
+        if not res:
+            continue
+
+        df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
+        fig = plot_graph(df_t, merged, t, dev)
+        comment, _ = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
+
+        cols[i%2].plotly_chart(fig, use_container_width=True)
+        cols[i%2].code(comment)
+        i += 1
 
 # ================= TABLE =================
 st.subheader("Turbine Ranking")
@@ -185,7 +228,6 @@ for t in df["Name"].unique():
     _, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
     _, reason = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
 
-    # NEW STATUS LOGIC
     if -2 <= dev <= 2:
         status = "Normal"
     elif 2 < dev <= 8:
@@ -208,8 +250,6 @@ for t in df["Name"].unique():
     })
 
 results_df = pd.DataFrame(results)
-
-# SORT
 results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last')
 
 # TOP 5 WORST
@@ -217,7 +257,7 @@ st.markdown("### ⚠️ Top 5 Worst Performing Turbines")
 worst = results_df.sort_values(by="Deviation_%").head(5)
 st.table(worst[["Turbine","Deviation_%","Status"]])
 
-# COLOR FUNCTION
+# COLOR
 def color_row(row):
     if row["Status"] == "Normal":
         return ['background-color: #ccffcc'] * len(row)
@@ -234,9 +274,9 @@ def color_row(row):
 
 st.dataframe(results_df.style.apply(color_row, axis=1), use_container_width=True)
 
-# DOWNLOAD BUTTON
+# DOWNLOAD
 st.download_button(
-    label="Download Report (Excel)",
+    label="Download Report (CSV)",
     data=results_df.to_csv(index=False).encode('utf-8'),
     file_name='turbine_report.csv',
     mime='text/csv'
