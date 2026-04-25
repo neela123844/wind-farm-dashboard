@@ -29,7 +29,6 @@ if uploaded_file is None:
     st.warning("Please upload SCADA file")
     st.stop()
 
-#  SITE LIST (NO [...])
 site = st.sidebar.selectbox(
     "Select Site for Reference Curve",
     ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki",
@@ -41,17 +40,12 @@ site = st.sidebar.selectbox(
      "Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
 )
 
-# extra safety
-if not isinstance(site, str):
-    st.error("Invalid site selection")
-    st.stop()
-
 mode = st.sidebar.radio(
     "Select View",
     ["Single Turbine", "Compare Turbines", "Show All Turbines"]
 )
 
-# ---------------- LOAD SCADA ----------------
+# LOAD SCADA
 @st.cache_data
 def load_scada(file):
     df = pd.read_csv(file, low_memory=False)
@@ -78,7 +72,7 @@ end_date = df[time_col].max()
 start_date = end_date - timedelta(days=15 if period=="Last 15 Days" else 7 if period=="Weekly" else 30)
 df = df[(df[time_col]>=start_date)&(df[time_col]<=end_date)]
 
-# ---------------- LOAD REFERENCE (FIXED) ----------------
+# LOAD REFERENCE
 @st.cache_data
 def load_reference(site):
     ref_raw = pd.read_excel(REF_FILE, header=None)
@@ -100,12 +94,12 @@ def load_reference(site):
 
                 return pd.DataFrame({"WindBin":wind_bins,"RefPower":ref_interp})
 
-    st.error(" Site not found in reference file")
+    st.error("Site not found")
     st.stop()
 
 ref_curve = load_reference(site)
 
-# ---------------- PROCESS ----------------
+# PROCESS
 def process_turbine(t):
     df_t = df[df["Name"]==t].copy()
     df_t = df_t[(df_t[wind_col]>=3)&(df_t[wind_col]<=25)&(df_t[power_col]>0)]
@@ -129,7 +123,7 @@ def process_turbine(t):
 
     return df_t, merged, avg_dev, std_dev
 
-# ---------------- GRAPH ----------------
+# GRAPH
 def plot_graph(df_t, merged, title, dev):
     color = "green" if -2 <= dev <= 2 else "orange" if dev < -2 else "red"
 
@@ -144,10 +138,10 @@ def plot_graph(df_t, merged, title, dev):
     fig.update_layout(title=dict(text=title, font=dict(color=color)))
     return fig
 
-# ---------------- COMMENT ----------------
+# COMMENT
 def generate_comment(dev):
     if dev < -10:
-        return "🔴 Severe underperformance → Blade / Yaw issue"
+        return "🔴 Severe underperformance → Blade / Dust / Yaw issue"
     elif dev < -2:
         return "🟠 Underperformance → Control / availability issue"
     elif dev > 8:
@@ -157,13 +151,23 @@ def generate_comment(dev):
     else:
         return "🟢 Normal performance"
 
-# ---------------- DISPLAY ----------------
+# DISPLAY GRAPHS
 cols = st.columns(2)
 i = 0
 
+results = []
+
 for t in df["Name"].unique():
     res = process_turbine(t)
+
     if not res:
+        results.append({
+            "Turbine": t,
+            "Deviation_%": None,
+            "Std_Dev_%": None,
+            "Status": "Issue",
+            "Reason": "Data Not Available"
+        })
         continue
 
     df_t, merged, dev, std = res
@@ -173,4 +177,60 @@ for t in df["Name"].unique():
         st.markdown("** Analysis**")
         st.code(generate_comment(dev))
 
+    # STATUS LOGIC
+    if -2 <= dev <= 2:
+        status = "Normal"
+    elif 2 < dev <= 8:
+        status = "Slight Over"
+    elif dev > 8:
+        status = "High Over"
+    elif -10 <= dev < -2:
+        status = "Under"
+    elif dev < -10:
+        status = "High Under"
+    else:
+        status = "Issue"
+
+    results.append({
+        "Turbine": t,
+        "Deviation_%": round(dev, 2),
+        "Std_Dev_%": round((std / RATED_POWER) * 100, 2),
+        "Status": status,
+        "Reason": generate_comment(dev)
+    })
+
     i += 1
+
+# TABLE
+st.subheader("Turbine Ranking")
+
+results_df = pd.DataFrame(results)
+results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last')
+
+st.markdown("### Top 5 Worst Performing Turbines")
+st.table(results_df.sort_values(by="Deviation_%").head(5)[["Turbine","Deviation_%","Status"]])
+
+# COLOR
+def color_row(row):
+    if row["Status"] == "Normal":
+        return ['background-color: #ccffcc'] * len(row)
+    elif row["Status"] == "Slight Over":
+        return ['background-color: #66ff66'] * len(row)
+    elif row["Status"] == "High Over":
+        return ['background-color: #009933'] * len(row)
+    elif row["Status"] == "Under":
+        return ['background-color: #ffcc66'] * len(row)
+    elif row["Status"] == "High Under":
+        return ['background-color: #ff6666'] * len(row)
+    else:
+        return ['background-color: #cccccc'] * len(row)
+
+st.dataframe(results_df.style.apply(color_row, axis=1), use_container_width=True)
+
+# DOWNLOAD
+st.download_button(
+    label="Download Report (CSV)",
+    data=results_df.to_csv(index=False).encode('utf-8'),
+    file_name='turbine_report.csv',
+    mime='text/csv'
+)
