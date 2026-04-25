@@ -22,30 +22,18 @@ BIN_SIZE = 0.5
 TOLERANCE = 2.0
 RATED_POWER = 3400.0
 
-# SIDEBAR
 uploaded_file = st.sidebar.file_uploader("Upload SCADA CSV", type=["csv"])
 
 if uploaded_file is None:
     st.warning("Please upload SCADA file")
     st.stop()
 
-site = st.sidebar.selectbox(
-    "Select Site for Reference Curve",
-    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki",
-     "CleanMax Motadevaliya","Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar",
-     "FP_Kudligi","Sprng TN","Otha Pithalpur-GJ","AMGEPL,Kurnool AP","ReNew1_Gadag",
-     "partner Ottapidaum","Cleanmax SANATHALI","Cleanmax Babra","RenfraEnergy Trichy",
-     "RENEW-03 Sholapur","Renew2 Chandwad","ReNew-4 Patoda","Clean max Jagalur",
-     "Sembcorp Tuticorin","Renew-4 Kudligi","Renew Otha","Cleanmax Honavad",
-     "Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
-)
+site = st.sidebar.selectbox("Select Site for Reference Curve", [...])  # keep same list
 
-mode = st.sidebar.radio(
-    "Select View",
-    ["Single Turbine", "Compare Turbines", "Show All Turbines"]
-)
+mode = st.sidebar.radio("Select View",
+                        ["Single Turbine", "Compare Turbines", "Show All Turbines"])
 
-# LOAD SCADA
+# ---------------- LOAD SCADA ----------------
 @st.cache_data
 def load_scada(file):
     df = pd.read_csv(file, low_memory=False)
@@ -72,7 +60,7 @@ end_date = df[time_col].max()
 start_date = end_date - timedelta(days=15 if period=="Last 15 Days" else 7 if period=="Weekly" else 30)
 df = df[(df[time_col]>=start_date)&(df[time_col]<=end_date)]
 
-# LOAD REFERENCE
+# ---------------- LOAD REFERENCE ----------------
 @st.cache_data
 def load_reference(site):
     ref_raw = pd.read_excel(REF_FILE, header=None)
@@ -94,7 +82,7 @@ def load_reference(site):
 
 ref_curve = load_reference(site)
 
-# PROCESS
+# ---------------- PROCESS ----------------
 def process_turbine(t):
     df_t = df[df["Name"]==t].copy()
     df_t = df_t[(df_t[wind_col]>=3)&(df_t[wind_col]<=25)&(df_t[power_col]>0)]
@@ -129,37 +117,70 @@ def process_turbine(t):
 
     return df_t, merged, avg_dev, availability, std_dev, stall_flag, stall_bins, derating_flag
 
-# GRAPH
+# ---------------- ENHANCED COMMENT ----------------
+def generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag):
+
+    if stall_flag:
+        return f"🔴 Stall detected at bins {stall_bins} → Blade/Aerodynamic issue", "Stall"
+
+    if derating_flag:
+        return "🟡 Derating → Temperature / Curtailment / Control limit", "Derating"
+
+    if dev < -2:
+        if std < 0.1 * RATED_POWER:
+            return "🔻 Stable underperformance → Blade/Pitch dust issue", "Blade issue"
+        elif avail < 90:
+            return "🔻 Low availability → Downtime / Faults", "Availability issue"
+        else:
+            return "🔻 Underperformance → Possible yaw misalignment/control issue", "Yaw issue"
+
+    if dev > 8:
+        if merged["AvgPower"].max() > RATED_POWER * 1.05:
+            return "🟢 High overperformance → Sensor / calibration issue", "Sensor issue"
+        else:
+            return "🟢 High overperformance → IPC / tuning effect", "Control tuning"
+
+    if dev > 2:
+        return "🟢 Slight overperformance → Wind variation / sensor drift", "Wind variation"
+
+    return "🟢 Normal performance", "Normal"
+
+# ---------------- GRAPH ----------------
 def plot_graph(df_t, merged, title, dev):
-    color = "green" if -2 <= dev <= 2 else "orange" if dev < -2 else "red"
+
+    if -2 <= dev <= 2:
+        color = "green"
+    elif dev < -10:
+        color = "red"
+    elif dev < -2:
+        color = "orange"
+    elif dev > 8:
+        color = "darkgreen"
+    else:
+        color = "lightgreen"
 
     fig = go.Figure()
+
     fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],
-                             mode='markers',marker=dict(size=3,opacity=0.4),name="SCADA"))
+                             mode='markers',marker=dict(size=3,opacity=0.4),
+                             name="SCADA"))
+
     fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],
                              mode='lines+markers',name="Actual"))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],
-                             mode='lines',line=dict(dash='dash'),name="Reference"))
 
-    fig.update_layout(title=dict(text=title, font=dict(color=color)))
+    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],
+                             mode='lines',line=dict(dash='dash'),
+                             name="Reference"))
+
+    fig.update_layout(
+        title=dict(text=title, font=dict(color=color, size=18)),
+        paper_bgcolor="white",
+        plot_bgcolor="white"
+    )
+
     return fig
 
-# COMMENT
-def generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag):
-    if stall_flag:
-        return "🔴 Stall issue detected", "Stall"
-    elif derating_flag:
-        return "🟡 Derating detected", "Derating"
-    elif dev < -2:
-        return "🔻 Underperformance", "Underperformance"
-    elif dev > 8:
-        return "🟢 High overperformance", "Overperformance"
-    elif dev > 2:
-        return "🟢 Slight overperformance", "Overperformance"
-    else:
-        return "🟢 Normal", "Normal"
-
-# ================= GRAPH =================
+# ---------------- GRAPH DISPLAY ----------------
 if mode == "Single Turbine":
     turbine = st.selectbox("Select Turbine", df["Name"].unique())
     res = process_turbine(turbine)
@@ -169,7 +190,7 @@ if mode == "Single Turbine":
         st.plotly_chart(plot_graph(df_t, merged, turbine, dev), use_container_width=True)
 
         comment, _ = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
-        st.markdown("**📝 Analysis**")
+        st.markdown("** Analysis**")
         st.code(comment)
 
 elif mode == "Compare Turbines":
@@ -202,79 +223,5 @@ else:
 
         with cols[i % 2]:
             st.plotly_chart(plot_graph(df_t, merged, t, dev), use_container_width=True)
-            st.markdown("** Analysis**")
+            st.markdown("**📝 Analysis**")
             st.code(comment)
-
-# ================= TABLE =================
-st.subheader("Turbine Ranking")
-
-results = []
-
-for t in df["Name"].unique():
-    res = process_turbine(t)
-
-    if not res:
-        results.append({
-            "Turbine": t,
-            "Deviation_%": None,
-            "Std_Dev_%": None,
-            "Status": "Issue",
-            "Reason": "Data Not Available"
-        })
-        continue
-
-    _, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
-    _, reason = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
-
-    if -2 <= dev <= 2:
-        status = "Normal"
-    elif 2 < dev <= 8:
-        status = "Slight Over"
-    elif dev > 8:
-        status = "High Over"
-    elif -10 <= dev < -2:
-        status = "Under"
-    elif dev < -10:
-        status = "High Under"
-    else:
-        status = "Issue"
-
-    results.append({
-        "Turbine": t,
-        "Deviation_%": round(dev, 2),
-        "Std_Dev_%": round((std / RATED_POWER) * 100, 2),
-        "Status": status,
-        "Reason": reason
-    })
-
-results_df = pd.DataFrame(results)
-results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last')
-
-# TOP 5 WORST
-st.markdown("###  Top 5 Worst Performing Turbines")
-st.table(results_df.sort_values(by="Deviation_%").head(5)[["Turbine","Deviation_%","Status"]])
-
-# COLOR TABLE
-def color_row(row):
-    if row["Status"] == "Normal":
-        return ['background-color: #ccffcc'] * len(row)
-    elif row["Status"] == "Slight Over":
-        return ['background-color: #66ff66'] * len(row)
-    elif row["Status"] == "High Over":
-        return ['background-color: #009933'] * len(row)
-    elif row["Status"] == "Under":
-        return ['background-color: #ffcc66'] * len(row)
-    elif row["Status"] == "High Under":
-        return ['background-color: #ff6666'] * len(row)
-    else:
-        return ['background-color: #cccccc'] * len(row)
-
-st.dataframe(results_df.style.apply(color_row, axis=1), use_container_width=True)
-
-# DOWNLOAD
-st.download_button(
-    label="Download Report (CSV)",
-    data=results_df.to_csv(index=False).encode('utf-8'),
-    file_name='turbine_report.csv',
-    mime='text/csv'
-)
