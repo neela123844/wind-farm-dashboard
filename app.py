@@ -135,26 +135,34 @@ def plot_graph(df_t, merged, title, dev):
     fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],
                              mode='lines',line=dict(dash='dash')))
 
-    fig.update_layout(title=dict(text=title, font=dict(color=color)))
+    fig.update_layout(title=dict(text=f"{title} (Dev: {round(dev,2)}%)", font=dict(color=color)))
     return fig
 
-# COMMENT
+# COMMENT WITH DEVIATION VALUE
 def generate_comment(dev):
-    if dev < -10:
-        return "🔴 Severe underperformance → Blade / Dust / Yaw issue"
-    elif dev < -2:
-        return "🟠 Underperformance → Control / availability issue"
-    elif dev > 8:
-        return "🟢 High overperformance → Sensor issue"
-    elif dev > 2:
-        return "🟢 Slight overperformance"
-    else:
-        return "🟢 Normal performance"
+    if dev is None:
+        return "Data not available"
 
-# DISPLAY GRAPHS
+    dev = round(dev, 2)
+
+    if dev < -72:
+        return f"🔴 Dev: {dev}% → Extreme issue (Data unreliable)"
+    elif dev < -10:
+        return f"🔴 Dev: {dev}% → Severe underperformance (Blade/Yaw/Dust issue)"
+    elif dev < -2:
+        return f"🟠 Dev: {dev}% → Underperformance (Control/availability)"
+    elif dev > 72:
+        return f"🟣 Dev: {dev}% → Abnormal high (Sensor/Data issue)"
+    elif dev > 8:
+        return f"🟢 Dev: {dev}% → High overperformance"
+    elif dev > 2:
+        return f"🟢 Dev: {dev}% → Slight overperformance"
+    else:
+        return f"🟢 Dev: {dev}% → Normal performance"
+
+# DISPLAY
 cols = st.columns(2)
 i = 0
-
 results = []
 
 for t in df["Name"].unique():
@@ -177,7 +185,7 @@ for t in df["Name"].unique():
         st.markdown("** Analysis**")
         st.code(generate_comment(dev))
 
-    # STATUS LOGIC
+    # STATUS LOGIC (UNCHANGED)
     if -2 <= dev <= 2:
         status = "Normal"
     elif 2 < dev <= 8:
@@ -207,7 +215,7 @@ st.subheader("Turbine Ranking")
 results_df = pd.DataFrame(results)
 results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last')
 
-st.markdown("### Top 5 Worst Performing Turbines")
+st.markdown("###  Top 5 Worst Performing Turbines")
 st.table(results_df.sort_values(by="Deviation_%").head(5)[["Turbine","Deviation_%","Status"]])
 
 # COLOR
