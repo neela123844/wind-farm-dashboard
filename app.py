@@ -40,7 +40,6 @@ site = st.sidebar.selectbox(
      "Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
 )
 
-
 mode = st.sidebar.radio(
     "Select View",
     ["Single Turbine", "Compare Turbines", "Show All Turbines"]
@@ -136,7 +135,7 @@ def plot_graph(df_t, merged, title, dev):
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],
-                             mode='markers',name="SCADA",marker=dict(size=3,opacity=0.4)))
+                             mode='markers',marker=dict(size=3,opacity=0.4),name="SCADA"))
     fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],
                              mode='lines+markers',name="Actual"))
     fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],
@@ -145,99 +144,25 @@ def plot_graph(df_t, merged, title, dev):
     fig.update_layout(title=dict(text=title, font=dict(color=color)))
     return fig
 
-# COMMENT FUNCTION (ENHANCED)
+# COMMENT
 def generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag):
-    comment = f"Deviation: {round(dev,2)}%\n"
-
     if stall_flag:
-        comment += f"🔴 Stall → aerodynamic/blade issue (bins {stall_bins})"
-        reason = "Stall / Blade issue"
+        return "Stall issue detected", "Stall"
 
     elif derating_flag:
-        comment += "🟡 Derating → control or temperature limit"
-        reason = "Derating / Curtailment"
+        return "Derating detected", "Derating"
 
     elif dev < -2:
-        if std < 0.5:
-            comment += "🔻 Stable low output → blade/pitch problem"
-            reason = "Blade/Pitch issue"
-        elif avail < 95:
-            comment += "🔻 Low availability → downtime"
-            reason = "Low availability"
-        else:
-            comment += "🔻 Possible yaw misalignment/control issue"
-            reason = "Yaw/Control issue"
+        return "Underperformance", "Underperformance"
 
     elif dev > 8:
-        comment += "🟠 High overperformance\n"
-        if std > 0.25 * RATED_POWER:
-            reason = "Measurement issue"
-        elif merged["AvgPower"].max() > RATED_POWER * 1.05:
-            reason = "Sensor misalignment"
-        else:
-            reason = "Calibration / IPC issue"
+        return "High overperformance", "Overperformance"
 
     elif dev > 2:
-        comment += "🟠 Slight overperformance"
-        reason = "Wind variation / sensor drift"
+        return "Slight overperformance", "Overperformance"
 
     else:
-        comment += "🟢 Normal performance"
-        reason = "Normal"
-
-    return comment, reason
-
-# ================= SINGLE =================
-if mode == "Single Turbine":
-    turbine = st.selectbox("Select Turbine", df["Name"].unique())
-    res = process_turbine(turbine)
-
-    if res:
-        df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
-        fig = plot_graph(df_t, merged, f"{turbine}", dev)
-        st.plotly_chart(fig, use_container_width=True)
-
-        comment, _ = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
-        st.code(comment)
-
-# ================= COMPARE =================
-elif mode == "Compare Turbines":
-    turbines = st.multiselect("Select Turbines", df["Name"].unique())
-    cols = st.columns(2)
-    i = 0
-
-    for t in turbines:
-        res = process_turbine(t)
-        if not res:
-            continue
-
-        df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
-        fig = plot_graph(df_t, merged, t, dev)
-
-        comment, _ = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
-
-        cols[i%2].plotly_chart(fig, use_container_width=True)
-        cols[i%2].code(comment)
-        i += 1
-
-# ================= ALL =================
-else:
-    cols = st.columns(2)
-    i = 0
-
-    for t in df["Name"].unique():
-        res = process_turbine(t)
-        if not res:
-            continue
-
-        df_t, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
-        fig = plot_graph(df_t, merged, t, dev)
-
-        comment, _ = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
-
-        cols[i%2].plotly_chart(fig, use_container_width=True)
-        cols[i%2].code(comment)
-        i += 1
+        return "Normal", "Normal"
 
 # ================= TABLE =================
 st.subheader("Turbine Ranking")
@@ -246,14 +171,33 @@ results = []
 
 for t in df["Name"].unique():
     res = process_turbine(t)
+
     if not res:
+        results.append({
+            "Turbine": t,
+            "Deviation_%": None,
+            "Std_Dev_%": None,
+            "Status": "Issue",
+            "Reason": "Data Not Available"
+        })
         continue
 
     _, merged, dev, avail, std, stall_flag, stall_bins, derating_flag = res
+    _, reason = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
 
-    comment, reason = generate_comment(dev, std, avail, merged, stall_flag, stall_bins, derating_flag)
-
-    status = "Normal" if -2<=dev<=2 else "Under" if dev<-2 else "Over"
+    # NEW STATUS LOGIC
+    if -2 <= dev <= 2:
+        status = "Normal"
+    elif 2 < dev <= 8:
+        status = "Slight Over"
+    elif dev > 8:
+        status = "High Over"
+    elif -10 <= dev < -2:
+        status = "Under"
+    elif dev < -10:
+        status = "High Under"
+    else:
+        status = "Issue"
 
     results.append({
         "Turbine": t,
@@ -265,15 +209,35 @@ for t in df["Name"].unique():
 
 results_df = pd.DataFrame(results)
 
+# SORT
+results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last')
+
+# TOP 5 WORST
+st.markdown("### ⚠️ Top 5 Worst Performing Turbines")
+worst = results_df.sort_values(by="Deviation_%").head(5)
+st.table(worst[["Turbine","Deviation_%","Status"]])
+
+# COLOR FUNCTION
 def color_row(row):
     if row["Status"] == "Normal":
-        return ['background-color: #99ff99'] * len(row)
+        return ['background-color: #ccffcc'] * len(row)
+    elif row["Status"] == "Slight Over":
+        return ['background-color: #66ff66'] * len(row)
+    elif row["Status"] == "High Over":
+        return ['background-color: #009933'] * len(row)
     elif row["Status"] == "Under":
         return ['background-color: #ffcc66'] * len(row)
-    else:
+    elif row["Status"] == "High Under":
         return ['background-color: #ff6666'] * len(row)
+    else:
+        return ['background-color: #cccccc'] * len(row)
 
-st.dataframe(
-    results_df.style.apply(color_row, axis=1),
-    use_container_width=True
+st.dataframe(results_df.style.apply(color_row, axis=1), use_container_width=True)
+
+# DOWNLOAD BUTTON
+st.download_button(
+    label="Download Report (Excel)",
+    data=results_df.to_csv(index=False).encode('utf-8'),
+    file_name='turbine_report.csv',
+    mime='text/csv'
 )
