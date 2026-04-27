@@ -138,7 +138,7 @@ def plot_graph(df_t, merged, title, dev):
     fig.update_layout(title=dict(text=f"{title} (Dev: {round(dev,2)}%)", font=dict(color=color)))
     return fig
 
-# COMMENT WITH DEVIATION VALUE
+# COMMENT
 def generate_comment(dev):
     if dev is None:
         return "Data not available"
@@ -160,32 +160,40 @@ def generate_comment(dev):
     else:
         return f"🟢 Dev: {dev}% → Normal performance"
 
+# -------- MODE HANDLING (FIXED PART) --------
+
+turbines = df["Name"].unique()
+
+if mode == "Single Turbine":
+    selected = st.sidebar.selectbox("Select Turbine", turbines)
+    turbines_to_show = [selected]
+
+elif mode == "Compare Turbines":
+    selected = st.sidebar.multiselect("Select Turbines", turbines)
+    turbines_to_show = selected if selected else []
+
+else:
+    turbines_to_show = turbines
+
 # DISPLAY
 cols = st.columns(2)
 i = 0
 results = []
 
-for t in df["Name"].unique():
+for t in turbines_to_show:
     res = process_turbine(t)
 
     if not res:
-        results.append({
-            "Turbine": t,
-            "Deviation_%": None,
-            "Std_Dev_%": None,
-            "Status": "Issue",
-            "Reason": "Data Not Available"
-        })
         continue
 
     df_t, merged, dev, std = res
 
     with cols[i%2]:
         st.plotly_chart(plot_graph(df_t, merged, t, dev), use_container_width=True)
-        st.markdown("** Analysis**")
+        st.markdown("Analysis")
         st.code(generate_comment(dev))
 
-    # STATUS LOGIC (UNCHANGED)
+    # STATUS
     if -2 <= dev <= 2:
         status = "Normal"
     elif 2 < dev <= 8:
@@ -215,7 +223,7 @@ st.subheader("Turbine Ranking")
 results_df = pd.DataFrame(results)
 results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last')
 
-st.markdown("###  Top 5 Worst Performing Turbines")
+st.markdown("### Worst Performing Turbines")
 st.table(results_df.sort_values(by="Deviation_%").head(5)[["Turbine","Deviation_%","Status"]])
 
 # COLOR
