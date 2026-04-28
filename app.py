@@ -222,12 +222,14 @@ for t in turbines_to_show:
     i += 1
 
 # TABLE
- st.subheader("Turbine Ranking") 
-results_df = pd.DataFrame(results) 
-results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last') 
-st.markdown("### Worst Performing Turbines") 
+st.subheader("Turbine Ranking")
+
+results_df = pd.DataFrame(results)
+results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last')
+
+st.markdown(" Worst Performing Turbines")
 st.table(results_df.sort_values(by="Deviation_%").head(5)[["Turbine","Deviation_%","Status"]])
-st.dataframe(results_df, use_container_width=True)
+
 # COLOR
 def color_row(row):
     if row["Status"] == "Normal":
@@ -243,8 +245,8 @@ def color_row(row):
     else:
         return ['background-color: #cccccc'] * len(row)
 
-st.dataframe(results_df.style.apply(color_row,axis=1),
-use_container_width = True)
+st.dataframe(results_df.style.apply(color_row, axis=1), use_container_width=True)
+
 # DOWNLOAD
 st.download_button(
     label="Download Report (CSV)",
