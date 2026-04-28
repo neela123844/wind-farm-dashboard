@@ -174,9 +174,9 @@ def generate_comment(dev):
     dev = round(dev, 2)
 
     if dev < -72:
-        return f"🔴 Dev: {dev}% → Extreme issue (Data unreliable)"
+        return f"🔴 Dev: {dev}% → Extreme issue (Data unreliable because of N/A)"
     elif dev < -10:
-        return f"🔴 Dev: {dev}% → Severe underperformance (Blade/Yaw/Dust issue)"
+        return f"🔴 Dev: {dev}% → Severe underperformance (Blade issue/Yaw issue/Dust issue)"
     elif dev < -2:
         return f"🟠 Dev: {dev}% → Underperformance (Control/availability)"
     elif dev > 72:
@@ -270,7 +270,7 @@ styled_table = results_df.style.apply(color_row, axis=1)
 st.dataframe(styled_table, use_container_width=True)
 
 # SAVE HTML (COLORED)
-zip_file.writestr("Turbine_Ranking.html", styled_table.to_html())
+zip_file.writestr("Turbine_Ranking.html","Power_Curve_Graph.html", styled_table.to_html(), styled_table.to_html())
 
 # SAVE CSV
 zip_file.writestr("report.csv", results_df.to_csv(index=False))
