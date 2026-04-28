@@ -10,14 +10,21 @@ import io
 
 st.set_page_config(layout="wide")
 
-# LOGO
+# ---------------- SAFE KALEIDO CHECK ----------------
+try:
+    import kaleido
+    KALEIDO_AVAILABLE = True
+except:
+    KALEIDO_AVAILABLE = False
+
+# ---------------- LOGO ----------------
 logo_path = os.path.join(os.path.dirname(__file__), "Envision.png")
 col1, col2, col3 = st.columns([1,2,1])
 with col2:
     if os.path.exists(logo_path):
         st.image(logo_path, width=300)
 
-# SITE CAPACITY MAP 
+# ---------------- SITE CAPACITY ----------------
 SITE_CAPACITY = {
     "CIP Hatalageri": 3.3,
     "JSW Tuljapur": 3.3,
@@ -54,11 +61,10 @@ SITE_CAPACITY = {
 }
 
 REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
-
 BIN_SIZE = 0.5
 RATED_POWER = 3400.0
 
-# SIDEBAR
+# ---------------- SIDEBAR ----------------
 st.sidebar.subheader("Upload SCADA File")
 uploaded_file = st.sidebar.file_uploader("Upload SCADA CSV", type=["csv"])
 
@@ -66,17 +72,14 @@ if uploaded_file is None:
     st.warning("Please upload SCADA file")
     st.stop()
 
-site = st.sidebar.selectbox(
-    "Select Site for Reference Curve",
-    list(SITE_CAPACITY.keys())
-)
+site = st.sidebar.selectbox("Select Site", list(SITE_CAPACITY.keys()))
 
 mode = st.sidebar.radio(
     "Select View",
     ["Single Turbine", "Compare Turbines", "Show All Turbines"]
 )
 
-# LOAD SCADA
+# ---------------- LOAD SCADA ----------------
 @st.cache_data
 def load_scada(file):
     df = pd.read_csv(file, low_memory=False)
@@ -97,7 +100,7 @@ def load_scada(file):
 
 df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
-# DATE FILTER
+# ---------------- DATE FILTER ----------------
 st.sidebar.markdown("Select Date Range")
 
 min_date = df[time_col].min()
@@ -111,16 +114,15 @@ end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)
 
 df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
 
-# HEADER
+# ---------------- HEADER ----------------
 num_turbines = df["Name"].nunique()
 capacity_per_turbine = SITE_CAPACITY.get(site, 3.3)
 total_capacity = num_turbines * capacity_per_turbine
 
-#  MW added ONLY here (display)
 st.title(f"{site} | {num_turbines} Turbines | {capacity_per_turbine} MW Each | Total: {round(total_capacity,2)} MW")
-st.markdown(f" Date Range: {start_date.date()} → {end_date.date()}")
+st.markdown(f"📅 Date Range: {start_date.date()} → {end_date.date()}")
 
-# LOAD REFERENCE
+# ---------------- LOAD REFERENCE ----------------
 @st.cache_data
 def load_reference(site):
     ref_raw = pd.read_excel(REF_FILE, header=None)
@@ -147,7 +149,7 @@ def load_reference(site):
 
 ref_curve = load_reference(site)
 
-# PROCESS 
+# ---------------- PROCESS ----------------
 def process_turbine(t):
     df_t = df[df["Name"]==t].copy()
     df_t = df_t[(df_t[wind_col]>=3)&(df_t[wind_col]<=25)&(df_t[power_col]>0)]
@@ -171,7 +173,7 @@ def process_turbine(t):
 
     return df_t, merged, avg_dev, std_dev
 
-# GRAPH 
+# ---------------- GRAPH ----------------
 def plot_graph(df_t, merged, title, dev):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],mode='markers'))
@@ -179,7 +181,7 @@ def plot_graph(df_t, merged, title, dev):
     fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],mode='lines',line=dict(dash='dash')))
     return fig
 
-# DISPLAY + SAVE IMAGES
+# ---------------- DISPLAY ----------------
 results = []
 zip_buffer = io.BytesIO()
 zip_file = zipfile.ZipFile(zip_buffer, "w")
@@ -194,15 +196,20 @@ for t in df["Name"].unique():
 
     st.plotly_chart(fig, use_container_width=True)
 
-    img_bytes = fig.to_image(format="png")
-    zip_file.writestr(f"{t}.png", img_bytes)
+    # SAFE IMAGE EXPORT
+    if KALEIDO_AVAILABLE:
+        try:
+            img_bytes = fig.to_image(format="png")
+            zip_file.writestr(f"{t}.png", img_bytes)
+        except:
+            pass
 
     results.append({
         "Turbine": t,
         "Deviation_%": round(dev,2)
     })
 
-# TABLE
+# ---------------- TABLE ----------------
 results_df = pd.DataFrame(results)
 st.dataframe(results_df)
 
@@ -210,7 +217,7 @@ st.dataframe(results_df)
 zip_file.writestr("report.csv", results_df.to_csv(index=False))
 zip_file.close()
 
-# DOWNLOAD
+# ---------------- DOWNLOAD ----------------
 st.download_button(
     label="Download Full Report (ZIP)",
     data=zip_buffer.getvalue(),
