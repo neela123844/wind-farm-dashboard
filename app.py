@@ -15,7 +15,7 @@ with col2:
     if os.path.exists(logo_path):
         st.image(logo_path, width=300)
 
-st.title("Wind Farm Performance Analytics Dashboard")
+st.title("Power Curve Analytics Report")
 
 REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
 
@@ -23,6 +23,7 @@ BIN_SIZE = 0.5
 RATED_POWER = 3400.0
 
 # SIDEBAR
+st.sidebar.subheader("Upload SCADA File")
 uploaded_file = st.sidebar.file_uploader("Upload SCADA CSV", type=["csv"])
 
 if uploaded_file is None:
