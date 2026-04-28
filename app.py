@@ -17,15 +17,15 @@ try:
 except:
     KALEIDO_AVAILABLE = False
 
-# TITLE
-st.title("Power Curve Analytics Report")
-
 # LOGO
 logo_path = os.path.join(os.path.dirname(__file__), "Envision.png")
 col1, col2, col3 = st.columns([1,2,1])
 with col2:
     if os.path.exists(logo_path):
         st.image(logo_path, width=300)
+
+# TITLE
+st.title("Power Curve Analytics Report")
 
 # SITE CAPACITY
 SITE_CAPACITY = {site:3.3 for site in [
