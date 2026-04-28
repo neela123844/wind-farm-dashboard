@@ -79,6 +79,9 @@ def load_scada(file):
 
 df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
+# ⭐ ADDITION: TOTAL TURBINES BEFORE FILTER
+all_turbines = df["Name"].unique()
+
 # DATE FILTER
 st.sidebar.markdown("Select Date Range")
 
@@ -93,13 +96,28 @@ end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)
 
 df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
 
+# ⭐ ADDITION: FILTERED TURBINES
+filtered_turbines = df["Name"].unique()
+missing_turbines = set(all_turbines) - set(filtered_turbines)
+
 # HEADER
-num_turbines = df["Name"].nunique()
+num_turbines = len(filtered_turbines)
 capacity_per_turbine = SITE_CAPACITY.get(site, 3.3)
 total_capacity = num_turbines * capacity_per_turbine
 
 st.subheader(f"{site} | {num_turbines} Turbines | {capacity_per_turbine} MW Each | Total: {round(total_capacity,2)} MW")
-st.markdown(f" Date Range: {start_date.date()} → {end_date.date()}")
+st.markdown(f"📅 Date Range: {start_date.date()} → {end_date.date()}")
+
+# ⭐ DEBUG PANEL (NEW)
+with st.expander("🔍 Turbine Availability Debug"):
+    st.write(f"Total turbines in file: {len(all_turbines)}")
+    st.write(f"Turbines after date filter: {len(filtered_turbines)}")
+    
+    if len(missing_turbines) > 0:
+        st.warning("Some turbines missing in selected date range")
+        st.write("Missing Turbines:", list(missing_turbines))
+    else:
+        st.success("All turbines present in selected date range")
 
 # LOAD REFERENCE
 @st.cache_data
@@ -189,7 +207,7 @@ def generate_comment(dev):
         return f"🟢 Dev: {dev}% → Normal performance"
 
 # MODE
-turbines = df["Name"].unique()
+turbines = filtered_turbines
 
 if mode == "Single Turbine":
     turbines_to_show = [st.sidebar.selectbox("Select Turbine", turbines)]
@@ -225,7 +243,6 @@ for t in turbines_to_show:
         except:
             pass
 
-    # STATUS (IMPORTANT FIX FOR COLORS)
     if -2 <= dev <= 2:
         status = "Normal"
     elif 2 < dev <= 8:
@@ -269,7 +286,7 @@ def color_row(row):
 styled_table = results_df.style.apply(color_row, axis=1)
 st.dataframe(styled_table, use_container_width=True)
 
-# SAVE HTML (COLORED)
+# SAVE HTML
 zip_file.writestr("Turbine_Ranking.html", styled_table.to_html())
 
 # SAVE CSV
