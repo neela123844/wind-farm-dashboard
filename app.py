@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from scipy.signal import savgol_filter
-from datetime import timedelta, datetime
+from datetime import timedelta
 import os
 
 st.set_page_config(layout="wide")
@@ -66,30 +66,33 @@ def load_scada(file):
 
 df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
-# DATE FILTER
-st.sidebar.subheader("Select Date Range")
+# ----------------- ✅ NEW CALENDAR FILTER -----------------
+st.sidebar.markdown("### Select Date Range")
 
-min_date = df[time_col].min().date()
-max_date = df[time_col].max().date()
+min_date = df[time_col].min()
+max_date = df[time_col].max()
 
-date_range = st.sidebar.date_input(
-    "Select Date Range",
-    value=(min_date, max_date),
+start_date = st.sidebar.date_input(
+    "Start Date",
+    value=max_date - timedelta(days=15),
     min_value=min_date,
     max_value=max_date
 )
 
-if len(date_range) == 2:
-    start_date, end_date = date_range
-else:
-    start_date = end_date = min_date
+end_date = st.sidebar.date_input(
+    "End Date",
+    value=max_date,
+    min_value=min_date,
+    max_value=max_date
+)
 
-start_datetime = datetime.combine(start_date, datetime.min.time())
-end_datetime = datetime.combine(end_date, datetime.max.time())
+# Convert to datetime
+start_date = pd.to_datetime(start_date)
+end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)  # include full day
 
-df = df[(df[time_col] >= start_datetime) & (df[time_col] <= end_datetime)]
-
-st.sidebar.markdown(f"**Selected Period:**\n{start_datetime} → {end_datetime}")
+# Apply filter
+df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
+# ---------------------------------------------------------
 
 # LOAD REFERENCE
 @st.cache_data
@@ -161,15 +164,17 @@ def plot_graph(df_t, merged, title, dev):
 def generate_comment(dev):
     if dev is None:
         return "Data not available"
+
     dev = round(dev, 2)
+
     if dev < -72:
-        return f"🔴 Dev: {dev}% → Extreme issue"
+        return f"🔴 Dev: {dev}% → Extreme issue (Data unreliable)"
     elif dev < -10:
-        return f"🔴 Dev: {dev}% → Severe underperformance"
+        return f"🔴 Dev: {dev}% → Severe underperformance (Blade/Yaw/Dust issue)"
     elif dev < -2:
-        return f"🟠 Dev: {dev}% → Underperformance"
+        return f"🟠 Dev: {dev}% → Underperformance (Control/availability)"
     elif dev > 72:
-        return f"🟣 Dev: {dev}% → Sensor/Data issue"
+        return f"🟣 Dev: {dev}% → Abnormal high (Sensor/Data issue)"
     elif dev > 8:
         return f"🟢 Dev: {dev}% → High overperformance"
     elif dev > 2:
@@ -181,18 +186,24 @@ def generate_comment(dev):
 turbines = df["Name"].unique()
 
 if mode == "Single Turbine":
-    turbines_to_show = [st.sidebar.selectbox("Select Turbine", turbines)]
+    selected = st.sidebar.selectbox("Select Turbine", turbines)
+    turbines_to_show = [selected]
+
 elif mode == "Compare Turbines":
-    turbines_to_show = st.sidebar.multiselect("Select Turbines", turbines)
+    selected = st.sidebar.multiselect("Select Turbines", turbines)
+    turbines_to_show = selected if selected else []
+
 else:
     turbines_to_show = turbines
 
 # DISPLAY
 cols = st.columns(2)
+i = 0
 results = []
 
-for i, t in enumerate(turbines_to_show):
+for t in turbines_to_show:
     res = process_turbine(t)
+
     if not res:
         continue
 
@@ -203,35 +214,58 @@ for i, t in enumerate(turbines_to_show):
         st.markdown("Analysis")
         st.code(generate_comment(dev))
 
+    if -2 <= dev <= 2:
+        status = "Normal"
+    elif 2 < dev <= 8:
+        status = "Slight Over"
+    elif dev > 8:
+        status = "High Over"
+    elif -10 <= dev < -2:
+        status = "Under"
+    elif dev < -10:
+        status = "High Under"
+    else:
+        status = "Issue"
+
     results.append({
         "Turbine": t,
         "Deviation_%": round(dev, 2),
         "Std_Dev_%": round((std / RATED_POWER) * 100, 2),
-        "Status": "Normal" if -2<=dev<=2 else "Under/Over",
+        "Status": status,
         "Reason": generate_comment(dev)
     })
+
+    i += 1
 
 # TABLE
 st.subheader("Turbine Ranking")
 
-results_df = pd.DataFrame(results).sort_values(by="Deviation_%", ascending=False)
+results_df = pd.DataFrame(results)
+results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last')
 
 st.markdown("### Worst Performing Turbines")
 st.table(results_df.sort_values(by="Deviation_%").head(5)[["Turbine","Deviation_%","Status"]])
 
-# COLOR FIX
 def color_row(row):
     if row["Status"] == "Normal":
         return ['background-color: #ccffcc'] * len(row)
+    elif row["Status"] == "Slight Over":
+        return ['background-color: #66ff66'] * len(row)
+    elif row["Status"] == "High Over":
+        return ['background-color: #009933'] * len(row)
+    elif row["Status"] == "Under":
+        return ['background-color: #ffcc66'] * len(row)
+    elif row["Status"] == "High Under":
+        return ['background-color: #ff6666'] * len(row)
     else:
-        return ['background-color: #ffcccc'] * len(row)
+        return ['background-color: #cccccc'] * len(row)
 
-st.write(results_df.style.apply(color_row, axis=1))
+st.dataframe(results_df.style.apply(color_row, axis=1), use_container_width=True)
 
 # DOWNLOAD
 st.download_button(
-    "Download Report (CSV)",
-    results_df.to_csv(index=False).encode('utf-8'),
-    "turbine_report.csv",
-    "text/csv"
+    label="Download Report (CSV)",
+    data=results_df.to_csv(index=False).encode('utf-8'),
+    file_name='turbine_report.csv',
+    mime='text/csv'
 )
