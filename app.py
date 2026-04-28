@@ -74,7 +74,7 @@ max_date = df[time_col].max()
 
 start_date = st.sidebar.date_input(
     "Start Date",
-    value=max_date - timedelta(days=31),
+    value=max_date - timedelta(days=15),
     min_value=min_date,
     max_value=max_date
 )
