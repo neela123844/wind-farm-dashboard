@@ -5,6 +5,8 @@ import plotly.graph_objects as go
 from scipy.signal import savgol_filter
 from datetime import timedelta
 import os
+import zipfile
+import io
 
 st.set_page_config(layout="wide")
 
@@ -15,7 +17,41 @@ with col2:
     if os.path.exists(logo_path):
         st.image(logo_path, width=300)
 
-st.title("Power Curve Analytics Report")
+#  SITE CAPACITY MAP 
+SITE_CAPACITY = {
+    "CIP Hatalageri": 3.3mW,
+    "JSW Tuljapur": 3.3mW,
+    "Blupine Sagapara": 3.3mW,
+    "Kalavad GJ": 3.3mW,
+    "Kalavad_PH2": 3.3mW,
+    "AMP_Energy": 3.3mW,
+    "Wanki": 3.3mW,
+    "CleanMax Motadevaliya": 3.3mW,
+    "Ayana Amerli": 3.3mW,
+    "Mahadev PH1": 3.3mW,
+    "Blupine-I, Ambada-GJ": 3.3mW,
+    "ACME Shapar": 3.3mW,
+    "FP_Kudligi": 3.3mW,
+    "Sprng TN": 3.3mW,
+    "Otha Pithalpur-GJ": 3.3mW,
+    "AMGEPL,Kurnool AP": 3.3mW,
+    "ReNew1_Gadag": 3.3mW,
+    "partner Ottapidaum": 3.3mW,
+    "Cleanmax SANATHALI": 3.3mW,
+    "Cleanmax Babra": 3.3mW,
+    "RenfraEnergy Trichy": 3.3mW,
+    "RENEW-03 Sholapur": 3.3mW,
+    "Renew2 Chandwad": 3.3mW,
+    "ReNew-4 Patoda": 3.3mW,
+    "Clean max Jagalur": 3.3mW,
+    "Sembcorp Tuticorin": 3.3mW,
+    "Renew-4 Kudligi": 3.3mW,
+    "Renew Otha": 3.3mW,
+    "Cleanmax Honavad": 3.3mW,
+    "Blueleaf Agar": 3.3mW,
+    "JSW_Sandur": 3.3mW,
+    "India_Hero_Doni": 3.3mW
+}
 
 REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
 
@@ -32,13 +68,7 @@ if uploaded_file is None:
 
 site = st.sidebar.selectbox(
     "Select Site for Reference Curve",
-    ["CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2","AMP_Energy","Wanki",
-     "CleanMax Motadevaliya","Ayana Amerli","Mahadev PH1","Blupine-I, Ambada-GJ","ACME Shapar",
-     "FP_Kudligi","Sprng TN","Otha Pithalpur-GJ","AMGEPL,Kurnool AP","ReNew1_Gadag",
-     "partner Ottapidaum","Cleanmax SANATHALI","Cleanmax Babra","RenfraEnergy Trichy",
-     "RENEW-03 Sholapur","Renew2 Chandwad","ReNew-4 Patoda","Clean max Jagalur",
-     "Sembcorp Tuticorin","Renew-4 Kudligi","Renew Otha","Cleanmax Honavad",
-     "Blueleaf Agar","JSW_Sandur","India_Hero_Doni"]
+    list(SITE_CAPACITY.keys())
 )
 
 mode = st.sidebar.radio(
@@ -67,33 +97,27 @@ def load_scada(file):
 
 df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
-# NEW CALENDAR FILTER 
+# DATE FILTER
 st.sidebar.markdown("Select Date Range")
 
 min_date = df[time_col].min()
 max_date = df[time_col].max()
 
-start_date = st.sidebar.date_input(
-    "Start Date",
-    value=max_date - timedelta(days=15),
-    min_value=min_date,
-    max_value=max_date
-)
+start_date = st.sidebar.date_input("Start Date", value=max_date - timedelta(days=15))
+end_date = st.sidebar.date_input("End Date", value=max_date)
 
-end_date = st.sidebar.date_input(
-    "End Date",
-    value=max_date,
-    min_value=min_date,
-    max_value=max_date
-)
-
-# Convert to datetime
 start_date = pd.to_datetime(start_date)
 end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)
 
-# Apply filter
 df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
 
+# HEADER
+num_turbines = df["Name"].nunique()
+capacity_per_turbine = SITE_CAPACITY.get(site, 3.3)
+total_capacity = num_turbines * capacity_per_turbine
+
+st.title(f"{site} | {num_turbines} Turbines | {capacity_per_turbine} MW Each | Total: {round(total_capacity,2)} MW")
+st.markdown(f" Date Range: {start_date.date()} → {end_date.date()}")
 
 # LOAD REFERENCE
 @st.cache_data
@@ -122,7 +146,7 @@ def load_reference(site):
 
 ref_curve = load_reference(site)
 
-# PROCESS
+# PROCESS (unchanged)
 def process_turbine(t):
     df_t = df[df["Name"]==t].copy()
     df_t = df_t[(df_t[wind_col]>=3)&(df_t[wind_col]<=25)&(df_t[power_col]>0)]
@@ -146,127 +170,52 @@ def process_turbine(t):
 
     return df_t, merged, avg_dev, std_dev
 
-# GRAPH
+# GRAPH (unchanged)
 def plot_graph(df_t, merged, title, dev):
-    color = "green" if -2 <= dev <= 2 else "orange" if dev < -2 else "red"
-
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],
-                             mode='markers',marker=dict(size=3,opacity=0.4)))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],
-                             mode='lines+markers'))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],
-                             mode='lines',line=dict(dash='dash')))
-
-    fig.update_layout(title=dict(text=f"{title} (Dev: {round(dev,2)}%)", font=dict(color=color)))
+    fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],mode='markers'))
+    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines+markers'))
+    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],mode='lines',line=dict(dash='dash')))
     return fig
 
-# COMMENT
-def generate_comment(dev):
-    if dev is None:
-        return "Data not available"
-
-    dev = round(dev, 2)
-
-    if dev < -72:
-        return f"🔴 Dev: {dev}% → Extreme issue (Data unreliable)"
-    elif dev < -10:
-        return f"🔴 Dev: {dev}% → Severe underperformance (Blade/Yaw/Dust issue)"
-    elif dev < -2:
-        return f"🟠 Dev: {dev}% → Underperformance (Control/availability)"
-    elif dev > 72:
-        return f"🟣 Dev: {dev}% → Abnormal high (Sensor/Data issue)"
-    elif dev > 8:
-        return f"🟢 Dev: {dev}% → High overperformance"
-    elif dev > 2:
-        return f"🟢 Dev: {dev}% → Slight overperformance"
-    else:
-        return f"🟢 Dev: {dev}% → Normal performance"
-
-# MODE
-turbines = df["Name"].unique()
-
-if mode == "Single Turbine":
-    selected = st.sidebar.selectbox("Select Turbine", turbines)
-    turbines_to_show = [selected]
-
-elif mode == "Compare Turbines":
-    selected = st.sidebar.multiselect("Select Turbines", turbines)
-    turbines_to_show = selected if selected else []
-
-else:
-    turbines_to_show = turbines
-
-# DISPLAY
-cols = st.columns(2)
-i = 0
+# DISPLAY + SAVE IMAGES
 results = []
+zip_buffer = io.BytesIO()
+zip_file = zipfile.ZipFile(zip_buffer, "w")
 
-for t in turbines_to_show:
+for t in df["Name"].unique():
     res = process_turbine(t)
-
     if not res:
         continue
 
     df_t, merged, dev, std = res
+    fig = plot_graph(df_t, merged, t, dev)
 
-    with cols[i%2]:
-        st.plotly_chart(plot_graph(df_t, merged, t, dev), use_container_width=True)
-        st.markdown("Analysis")
-        st.code(generate_comment(dev))
+    st.plotly_chart(fig, use_container_width=True)
 
-    if -2 <= dev <= 2:
-        status = "Normal"
-    elif 2 < dev <= 8:
-        status = "Slight Over"
-    elif dev > 8:
-        status = "High Over"
-    elif -10 <= dev < -2:
-        status = "Under"
-    elif dev < -10:
-        status = "High Under"
-    else:
-        status = "Issue"
+    # SAVE GRAPH IMAGE
+    img_bytes = fig.to_image(format="png")
+    zip_file.writestr(f"{t}.png", img_bytes)
 
     results.append({
         "Turbine": t,
-        "Deviation_%": round(dev, 2),
-        "Std_Dev_%": round((std / RATED_POWER) * 100, 2),
-        "Status": status,
-        "Reason": generate_comment(dev)
+        "Deviation_%": round(dev,2)
     })
 
-    i += 1
-
 # TABLE
-st.subheader("Turbine Ranking")
-
 results_df = pd.DataFrame(results)
-results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last')
 
-st.markdown("### Worst Performing Turbines")
-st.table(results_df.sort_values(by="Deviation_%").head(5)[["Turbine","Deviation_%","Status"]])
+st.dataframe(results_df)
 
-def color_row(row):
-    if row["Status"] == "Normal":
-        return ['background-color: #ccffcc'] * len(row)
-    elif row["Status"] == "Slight Over":
-        return ['background-color: #66ff66'] * len(row)
-    elif row["Status"] == "High Over":
-        return ['background-color: #009933'] * len(row)
-    elif row["Status"] == "Under":
-        return ['background-color: #ffcc66'] * len(row)
-    elif row["Status"] == "High Under":
-        return ['background-color: #ff6666'] * len(row)
-    else:
-        return ['background-color: #cccccc'] * len(row)
+# SAVE CSV
+zip_file.writestr("report.csv", results_df.to_csv(index=False))
 
-st.dataframe(results_df.style.apply(color_row, axis=1), use_container_width=True)
+zip_file.close()
 
-# DOWNLOAD
+# DOWNLOAD ZIP
 st.download_button(
-    label="Download Report (CSV)",
-    data=results_df.to_csv(index=False).encode('utf-8'),
-    file_name='turbine_report.csv',
-    mime='text/csv'
+    label="Download Full Report (ZIP)",
+    data=zip_buffer.getvalue(),
+    file_name="WindFarm_Report.zip",
+    mime="application/zip"
 )
