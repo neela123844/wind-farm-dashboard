@@ -10,61 +10,40 @@ import io
 
 st.set_page_config(layout="wide")
 
-# ---------------- SAFE KALEIDO CHECK ----------------
+# SAFE KALEIDO CHECK
 try:
     import kaleido
     KALEIDO_AVAILABLE = True
 except:
     KALEIDO_AVAILABLE = False
 
-# ---------------- LOGO ----------------
+# TITLE 
+st.title("Power Curve Analytics Report")
+
+# LOGO 
 logo_path = os.path.join(os.path.dirname(__file__), "Envision.png")
 col1, col2, col3 = st.columns([1,2,1])
 with col2:
     if os.path.exists(logo_path):
         st.image(logo_path, width=300)
 
-# ---------------- SITE CAPACITY ----------------
-SITE_CAPACITY = {
-    "CIP Hatalageri": 3.3,
-    "JSW Tuljapur": 3.3,
-    "Blupine Sagapara": 3.3,
-    "Kalavad GJ": 3.3,
-    "Kalavad_PH2": 3.3,
-    "AMP_Energy": 3.3,
-    "Wanki": 3.3,
-    "CleanMax Motadevaliya": 3.3,
-    "Ayana Amerli": 3.3,
-    "Mahadev PH1": 3.3,
-    "Blupine-I, Ambada-GJ": 3.3,
-    "ACME Shapar": 3.3,
-    "FP_Kudligi": 3.3,
-    "Sprng TN": 3.3,
-    "Otha Pithalpur-GJ": 3.3,
-    "AMGEPL,Kurnool AP": 3.3,
-    "ReNew1_Gadag": 3.3,
-    "partner Ottapidaum": 3.3,
-    "Cleanmax SANATHALI": 3.3,
-    "Cleanmax Babra": 3.3,
-    "RenfraEnergy Trichy": 3.3,
-    "RENEW-03 Sholapur": 3.3,
-    "Renew2 Chandwad": 3.3,
-    "ReNew-4 Patoda": 3.3,
-    "Clean max Jagalur": 3.3,
-    "Sembcorp Tuticorin": 3.3,
-    "Renew-4 Kudligi": 3.3,
-    "Renew Otha": 3.3,
-    "Cleanmax Honavad": 3.3,
-    "Blueleaf Agar": 3.3,
-    "JSW_Sandur": 3.3,
-    "India_Hero_Doni": 3.3
-}
+# SITE CAPACITY
+SITE_CAPACITY = {site:3.3 for site in [
+"CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2",
+"AMP_Energy","Wanki","CleanMax Motadevaliya","Ayana Amerli","Mahadev PH1",
+"Blupine-I, Ambada-GJ","ACME Shapar","FP_Kudligi","Sprng TN",
+"Otha Pithalpur-GJ","AMGEPL,Kurnool AP","ReNew1_Gadag","partner Ottapidaum",
+"Cleanmax SANATHALI","Cleanmax Babra","RenfraEnergy Trichy","RENEW-03 Sholapur",
+"Renew2 Chandwad","ReNew-4 Patoda","Clean max Jagalur","Sembcorp Tuticorin",
+"Renew-4 Kudligi","Renew Otha","Cleanmax Honavad","Blueleaf Agar",
+"JSW_Sandur","India_Hero_Doni"
+]}
 
 REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
 BIN_SIZE = 0.5
 RATED_POWER = 3400.0
 
-# ---------------- SIDEBAR ----------------
+# SIDEBAR 
 st.sidebar.subheader("Upload SCADA File")
 uploaded_file = st.sidebar.file_uploader("Upload SCADA CSV", type=["csv"])
 
@@ -79,7 +58,7 @@ mode = st.sidebar.radio(
     ["Single Turbine", "Compare Turbines", "Show All Turbines"]
 )
 
-# ---------------- LOAD SCADA ----------------
+# LOAD SCADA
 @st.cache_data
 def load_scada(file):
     df = pd.read_csv(file, low_memory=False)
@@ -100,7 +79,7 @@ def load_scada(file):
 
 df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
-# ---------------- DATE FILTER ----------------
+# DATE FILTER 
 st.sidebar.markdown("Select Date Range")
 
 min_date = df[time_col].min()
@@ -114,15 +93,15 @@ end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)
 
 df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
 
-# ---------------- HEADER ----------------
+# HEADER 
 num_turbines = df["Name"].nunique()
 capacity_per_turbine = SITE_CAPACITY.get(site, 3.3)
 total_capacity = num_turbines * capacity_per_turbine
 
-st.title(f"{site} | {num_turbines} Turbines | {capacity_per_turbine} MW Each | Total: {round(total_capacity,2)} MW")
-st.markdown(f"📅 Date Range: {start_date.date()} → {end_date.date()}")
+st.subheader(f"{site} | {num_turbines} Turbines | {capacity_per_turbine} MW Each | Total: {round(total_capacity,2)} MW")
+st.markdown(f" Date Range: {start_date.date()} → {end_date.date()}")
 
-# ---------------- LOAD REFERENCE ----------------
+# LOAD REFERENCE
 @st.cache_data
 def load_reference(site):
     ref_raw = pd.read_excel(REF_FILE, header=None)
@@ -131,7 +110,7 @@ def load_reference(site):
         for c in range(ref_raw.shape[1]):
             cell = str(ref_raw.iloc[r,c])
 
-            if isinstance(site, str) and site.lower() in cell.lower():
+            if site.lower() in cell.lower():
                 ref = ref_raw.iloc[r+2:r+60,[c-1,c+3]].copy()
                 ref.columns=["WindSpeed","RefPower"]
                 ref = ref.dropna()
@@ -149,7 +128,20 @@ def load_reference(site):
 
 ref_curve = load_reference(site)
 
-# ---------------- PROCESS ----------------
+# COMMENT 
+def generate_comment(dev):
+    if dev < -10:
+        return "🔴 Severe underperformance"
+    elif dev < -2:
+        return "🟠 Underperformance"
+    elif dev > 8:
+        return "🟢 High overperformance"
+    elif dev > 2:
+        return "🟢 Slight overperformance"
+    else:
+        return "🟢 Normal"
+
+#  PROCESS 
 def process_turbine(t):
     df_t = df[df["Name"]==t].copy()
     df_t = df_t[(df_t[wind_col]>=3)&(df_t[wind_col]<=25)&(df_t[power_col]>0)]
@@ -173,30 +165,46 @@ def process_turbine(t):
 
     return df_t, merged, avg_dev, std_dev
 
-# ---------------- GRAPH ----------------
-def plot_graph(df_t, merged, title, dev):
+#  GRAPH 
+def plot_graph(df_t, merged, title):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],mode='markers'))
     fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines+markers'))
     fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],mode='lines',line=dict(dash='dash')))
+    fig.update_layout(title=title)
     return fig
 
-# ---------------- DISPLAY ----------------
+# MODE SELECTION 
+turbines = df["Name"].unique()
+
+if mode == "Single Turbine":
+    selected = st.sidebar.selectbox("Select Turbine", turbines)
+    turbines_to_show = [selected]
+
+elif mode == "Compare Turbines":
+    selected = st.sidebar.multiselect("Select Turbines", turbines)
+    turbines_to_show = selected
+
+else:
+    turbines_to_show = turbines
+
+# DISPLAY 
 results = []
 zip_buffer = io.BytesIO()
 zip_file = zipfile.ZipFile(zip_buffer, "w")
 
-for t in df["Name"].unique():
+for t in turbines_to_show:
     res = process_turbine(t)
     if not res:
         continue
 
     df_t, merged, dev, std = res
-    fig = plot_graph(df_t, merged, t, dev)
 
+    fig = plot_graph(df_t, merged, t)
     st.plotly_chart(fig, use_container_width=True)
 
-    # SAFE IMAGE EXPORT
+    st.code(generate_comment(dev))
+
     if KALEIDO_AVAILABLE:
         try:
             img_bytes = fig.to_image(format="png")
@@ -206,18 +214,34 @@ for t in df["Name"].unique():
 
     results.append({
         "Turbine": t,
-        "Deviation_%": round(dev,2)
+        "Deviation_%": round(dev,2),
+        "Status": generate_comment(dev)
     })
 
-# ---------------- TABLE ----------------
+# TABLE 
+st.subheader("Turbine Ranking")
+
 results_df = pd.DataFrame(results)
-st.dataframe(results_df)
+
+def color_row(row):
+    if "Normal" in row["Status"]:
+        return ['background-color: #ccffcc'] * len(row)
+    elif "Slight" in row["Status"]:
+        return ['background-color: #66ff66'] * len(row)
+    elif "High" in row["Status"]:
+        return ['background-color: #009933'] * len(row)
+    elif "Underperformance" in row["Status"]:
+        return ['background-color: #ffcc66'] * len(row)
+    else:
+        return ['background-color: #ff6666'] * len(row)
+
+st.dataframe(results_df.style.apply(color_row, axis=1), use_container_width=True)
 
 # SAVE CSV
 zip_file.writestr("report.csv", results_df.to_csv(index=False))
 zip_file.close()
 
-# ---------------- DOWNLOAD ----------------
+# DOWNLOAD
 st.download_button(
     label="Download Full Report (ZIP)",
     data=zip_buffer.getvalue(),
