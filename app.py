@@ -17,40 +17,40 @@ with col2:
     if os.path.exists(logo_path):
         st.image(logo_path, width=300)
 
-#  SITE CAPACITY MAP 
+# SITE CAPACITY MAP 
 SITE_CAPACITY = {
-    "CIP Hatalageri": 3.3mW,
-    "JSW Tuljapur": 3.3mW,
-    "Blupine Sagapara": 3.3mW,
-    "Kalavad GJ": 3.3mW,
-    "Kalavad_PH2": 3.3mW,
-    "AMP_Energy": 3.3mW,
-    "Wanki": 3.3mW,
-    "CleanMax Motadevaliya": 3.3mW,
-    "Ayana Amerli": 3.3mW,
-    "Mahadev PH1": 3.3mW,
-    "Blupine-I, Ambada-GJ": 3.3mW,
-    "ACME Shapar": 3.3mW,
-    "FP_Kudligi": 3.3mW,
-    "Sprng TN": 3.3mW,
-    "Otha Pithalpur-GJ": 3.3mW,
-    "AMGEPL,Kurnool AP": 3.3mW,
-    "ReNew1_Gadag": 3.3mW,
-    "partner Ottapidaum": 3.3mW,
-    "Cleanmax SANATHALI": 3.3mW,
-    "Cleanmax Babra": 3.3mW,
-    "RenfraEnergy Trichy": 3.3mW,
-    "RENEW-03 Sholapur": 3.3mW,
-    "Renew2 Chandwad": 3.3mW,
-    "ReNew-4 Patoda": 3.3mW,
-    "Clean max Jagalur": 3.3mW,
-    "Sembcorp Tuticorin": 3.3mW,
-    "Renew-4 Kudligi": 3.3mW,
-    "Renew Otha": 3.3mW,
-    "Cleanmax Honavad": 3.3mW,
-    "Blueleaf Agar": 3.3mW,
-    "JSW_Sandur": 3.3mW,
-    "India_Hero_Doni": 3.3mW
+    "CIP Hatalageri": 3.3,
+    "JSW Tuljapur": 3.3,
+    "Blupine Sagapara": 3.3,
+    "Kalavad GJ": 3.3,
+    "Kalavad_PH2": 3.3,
+    "AMP_Energy": 3.3,
+    "Wanki": 3.3,
+    "CleanMax Motadevaliya": 3.3,
+    "Ayana Amerli": 3.3,
+    "Mahadev PH1": 3.3,
+    "Blupine-I, Ambada-GJ": 3.3,
+    "ACME Shapar": 3.3,
+    "FP_Kudligi": 3.3,
+    "Sprng TN": 3.3,
+    "Otha Pithalpur-GJ": 3.3,
+    "AMGEPL,Kurnool AP": 3.3,
+    "ReNew1_Gadag": 3.3,
+    "partner Ottapidaum": 3.3,
+    "Cleanmax SANATHALI": 3.3,
+    "Cleanmax Babra": 3.3,
+    "RenfraEnergy Trichy": 3.3,
+    "RENEW-03 Sholapur": 3.3,
+    "Renew2 Chandwad": 3.3,
+    "ReNew-4 Patoda": 3.3,
+    "Clean max Jagalur": 3.3,
+    "Sembcorp Tuticorin": 3.3,
+    "Renew-4 Kudligi": 3.3,
+    "Renew Otha": 3.3,
+    "Cleanmax Honavad": 3.3,
+    "Blueleaf Agar": 3.3,
+    "JSW_Sandur": 3.3,
+    "India_Hero_Doni": 3.3
 }
 
 REF_FILE = "India site Standard & Theoretical PC data 1234.xlsx"
@@ -116,6 +116,7 @@ num_turbines = df["Name"].nunique()
 capacity_per_turbine = SITE_CAPACITY.get(site, 3.3)
 total_capacity = num_turbines * capacity_per_turbine
 
+#  MW added ONLY here (display)
 st.title(f"{site} | {num_turbines} Turbines | {capacity_per_turbine} MW Each | Total: {round(total_capacity,2)} MW")
 st.markdown(f" Date Range: {start_date.date()} → {end_date.date()}")
 
@@ -146,7 +147,7 @@ def load_reference(site):
 
 ref_curve = load_reference(site)
 
-# PROCESS (unchanged)
+# PROCESS 
 def process_turbine(t):
     df_t = df[df["Name"]==t].copy()
     df_t = df_t[(df_t[wind_col]>=3)&(df_t[wind_col]<=25)&(df_t[power_col]>0)]
@@ -170,7 +171,7 @@ def process_turbine(t):
 
     return df_t, merged, avg_dev, std_dev
 
-# GRAPH (unchanged)
+# GRAPH 
 def plot_graph(df_t, merged, title, dev):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],mode='markers'))
@@ -193,7 +194,6 @@ for t in df["Name"].unique():
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # SAVE GRAPH IMAGE
     img_bytes = fig.to_image(format="png")
     zip_file.writestr(f"{t}.png", img_bytes)
 
@@ -204,15 +204,13 @@ for t in df["Name"].unique():
 
 # TABLE
 results_df = pd.DataFrame(results)
-
 st.dataframe(results_df)
 
 # SAVE CSV
 zip_file.writestr("report.csv", results_df.to_csv(index=False))
-
 zip_file.close()
 
-# DOWNLOAD ZIP
+# DOWNLOAD
 st.download_button(
     label="Download Full Report (ZIP)",
     data=zip_buffer.getvalue(),
