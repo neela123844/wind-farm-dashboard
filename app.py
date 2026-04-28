@@ -10,24 +10,24 @@ import io
 
 st.set_page_config(layout="wide")
 
-# SAFE KALEIDO CHECK 
+# SAFE KALEIDO CHECK
 try:
     import kaleido
     KALEIDO_AVAILABLE = True
 except:
     KALEIDO_AVAILABLE = False
 
-#  TITLE 
+# TITLE
 st.title("Power Curve Analytics Report")
 
-# LOGO 
+# LOGO
 logo_path = os.path.join(os.path.dirname(__file__), "Envision.png")
 col1, col2, col3 = st.columns([1,2,1])
 with col2:
     if os.path.exists(logo_path):
         st.image(logo_path, width=300)
 
-#  SITE CAPACITY
+# SITE CAPACITY
 SITE_CAPACITY = {site:3.3 for site in [
 "CIP Hatalageri","JSW Tuljapur","Blupine Sagapara","Kalavad GJ","Kalavad_PH2",
 "AMP_Energy","Wanki","CleanMax Motadevaliya","Ayana Amerli","Mahadev PH1",
@@ -58,7 +58,7 @@ mode = st.sidebar.radio(
     ["Single Turbine", "Compare Turbines", "Show All Turbines"]
 )
 
-# LOAD SCADA 
+# LOAD SCADA
 @st.cache_data
 def load_scada(file):
     df = pd.read_csv(file, low_memory=False)
@@ -79,7 +79,7 @@ def load_scada(file):
 
 df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
-#  DATE FILTER
+# DATE FILTER
 st.sidebar.markdown("Select Date Range")
 
 min_date = df[time_col].min()
@@ -93,7 +93,7 @@ end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)
 
 df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
 
-#  HEADER 
+# HEADER
 num_turbines = df["Name"].nunique()
 capacity_per_turbine = SITE_CAPACITY.get(site, 3.3)
 total_capacity = num_turbines * capacity_per_turbine
@@ -192,13 +192,9 @@ def generate_comment(dev):
 turbines = df["Name"].unique()
 
 if mode == "Single Turbine":
-    selected = st.sidebar.selectbox("Select Turbine", turbines)
-    turbines_to_show = [selected]
-
+    turbines_to_show = [st.sidebar.selectbox("Select Turbine", turbines)]
 elif mode == "Compare Turbines":
-    selected = st.sidebar.multiselect("Select Turbines", turbines)
-    turbines_to_show = selected if selected else []
-
+    turbines_to_show = st.sidebar.multiselect("Select Turbines", turbines)
 else:
     turbines_to_show = turbines
 
@@ -206,20 +202,30 @@ else:
 cols = st.columns(2)
 i = 0
 results = []
+zip_buffer = io.BytesIO()
+zip_file = zipfile.ZipFile(zip_buffer, "w")
 
 for t in turbines_to_show:
     res = process_turbine(t)
-
     if not res:
         continue
 
     df_t, merged, dev, std = res
 
-    with cols[i%2]:
-        st.plotly_chart(plot_graph(df_t, merged, t, dev), use_container_width=True)
+    with cols[i % 2]:
+        fig = plot_graph(df_t, merged, t, dev)
+        st.plotly_chart(fig, use_container_width=True)
         st.markdown("Analysis")
         st.code(generate_comment(dev))
 
+    if KALEIDO_AVAILABLE:
+        try:
+            img_bytes = fig.to_image(format="png")
+            zip_file.writestr(f"{t}.png", img_bytes)
+        except:
+            pass
+
+    # STATUS (IMPORTANT FIX FOR COLORS)
     if -2 <= dev <= 2:
         status = "Normal"
     elif 2 < dev <= 8:
@@ -236,80 +242,15 @@ for t in turbines_to_show:
     results.append({
         "Turbine": t,
         "Deviation_%": round(dev, 2),
-        "Std_Dev_%": round((std / RATED_POWER) * 100, 2),
-        "Status": status,
-        "Reason": generate_comment(dev)
+        "Status": status
     })
 
     i += 1
 
-# PROCESS
-def process_turbine(t):
-    df_t = df[df["Name"]==t].copy()
-    df_t = df_t[(df_t[wind_col]>=3)&(df_t[wind_col]<=25)&(df_t[power_col]>0)]
-
-    if len(df_t)<30:
-        return None
-
-    std_dev = df_t[power_col].std()
-
-    df_t["WindBin"] = (df_t[wind_col]/BIN_SIZE).round()*BIN_SIZE
-    actual = df_t.groupby("WindBin").agg(AvgPower=(power_col,"mean")).reset_index()
-
-    merged = ref_curve.merge(actual,on="WindBin",how="left")
-
-    valid = merged["AvgPower"].notna()
-    if valid.sum()>7:
-        merged.loc[valid,"AvgPower"] = savgol_filter(merged.loc[valid,"AvgPower"],7,2)
-
-    merged["Deviation_%"] = ((merged["AvgPower"]-merged["RefPower"])/merged["RefPower"])*100
-    avg_dev = merged["Deviation_%"].mean(skipna=True)
-
-    return df_t, merged, avg_dev, std_dev
-
-# GRAPH 
-def plot_graph(df_t, merged, title, dev):
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_t[wind_col],y=df_t[power_col],mode='markers'))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["AvgPower"],mode='lines+markers'))
-    fig.add_trace(go.Scatter(x=merged["WindBin"],y=merged["RefPower"],mode='lines',line=dict(dash='dash')))
-    fig.update_layout(title=f"{title} (Dev: {round(dev,2)}%)")
-    return fig
-
-# DISPLAY 
-results = []
-zip_buffer = io.BytesIO()
-zip_file = zipfile.ZipFile(zip_buffer, "w")
-
-for t in df["Name"].unique():
-    res = process_turbine(t)
-    if not res:
-        continue
-
-    df_t, merged, dev, std = res
-    fig = plot_graph(df_t, merged, t, dev)
-
-    st.plotly_chart(fig, use_container_width=True)
-    st.code(generate_comment(dev))
-
-    # SAVE GRAPH
-    if KALEIDO_AVAILABLE:
-        try:
-            img_bytes = fig.to_image(format="png")
-            zip_file.writestr(f"{t}.png", img_bytes)
-        except:
-            pass
-
-    results.append({
-        "Turbine": t,
-        "Deviation_%": round(dev,2),
-        "Status": generate_comment(dev)
-    })
-
-# TABLE 
+# TABLE
 st.subheader("Turbine Ranking")
 
-results_df = pd.DataFrame(results)
+results_df = pd.DataFrame(results).sort_values(by="Deviation_%")
 
 def color_row(row):
     if row["Status"] == "Normal":
@@ -328,16 +269,15 @@ def color_row(row):
 styled_table = results_df.style.apply(color_row, axis=1)
 st.dataframe(styled_table, use_container_width=True)
 
-#  SAVE HTML TABLE (keeps colors)
-html_table = styled_table.to_html()
-zip_file.writestr("Turbine_Ranking.html", html_table)
+# SAVE HTML (COLORED)
+zip_file.writestr("Turbine_Ranking.html", styled_table.to_html())
 
 # SAVE CSV
 zip_file.writestr("report.csv", results_df.to_csv(index=False))
 
 zip_file.close()
 
-# DOWNLOAD 
+# DOWNLOAD
 st.download_button(
     label="Download Full Dashboard (ZIP)",
     data=zip_buffer.getvalue(),
