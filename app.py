@@ -270,7 +270,7 @@ styled_table = results_df.style.apply(color_row, axis=1)
 st.dataframe(styled_table, use_container_width=True)
 
 # SAVE HTML (COLORED)
-zip_file.writestr("Turbine_Ranking.html","Tubine_Graph.html", styled_table.to_html(), styled_graph.to_html())
+zip_file.writestr("Turbine_Ranking.html", styled_table.to_html())
 
 # SAVE CSV
 zip_file.writestr("report.csv", results_df.to_csv(index=False))
