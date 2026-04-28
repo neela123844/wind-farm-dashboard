@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from scipy.signal import savgol_filter
-from datetime import timedelta
+from datetime import timedelta, datetime
 import os
 
 st.set_page_config(layout="wide")
@@ -66,11 +66,28 @@ def load_scada(file):
 
 df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
-# DATE FILTER
-period = st.sidebar.selectbox("Period", ["Last 15 Days","Weekly","Monthly"])
-end_date = df[time_col].max()
-start_date = end_date - timedelta(days=15 if period=="Last 15 Days" else 7 if period=="Weekly" else 30)
-df = df[(df[time_col]>=start_date)&(df[time_col]<=end_date)]
+# ------------------- NEW CALENDAR FILTER -------------------
+st.sidebar.subheader(" Select Date & Time Range")
+
+min_date = df[time_col].min()
+max_date = df[time_col].max()
+
+start_date = st.sidebar.date_input("Start Date", min_value=min_date.date(), max_value=max_date.date(), value=min_date.date())
+end_date = st.sidebar.date_input("End Date", min_value=min_date.date(), max_value=max_date.date(), value=max_date.date())
+
+# Optional time selection
+start_time = st.sidebar.time_input("Start Time", value=datetime.min.time())
+end_time = st.sidebar.time_input("End Time", value=datetime.max.time())
+
+# Combine date + time
+start_datetime = datetime.combine(start_date, start_time)
+end_datetime = datetime.combine(end_date, end_time)
+
+# Apply filter
+df = df[(df[time_col] >= start_datetime) & (df[time_col] <= end_datetime)]
+
+st.sidebar.markdown(f"**Selected Period:**\n{start_datetime} → {end_datetime}")
+
 
 # LOAD REFERENCE
 @st.cache_data
@@ -160,8 +177,7 @@ def generate_comment(dev):
     else:
         return f"🟢 Dev: {dev}% → Normal performance"
 
-# -------- MODE HANDLING (FIXED PART) --------
-
+# MODE HANDLING
 turbines = df["Name"].unique()
 
 if mode == "Single Turbine":
@@ -193,7 +209,6 @@ for t in turbines_to_show:
         st.markdown("Analysis")
         st.code(generate_comment(dev))
 
-    # STATUS
     if -2 <= dev <= 2:
         status = "Normal"
     elif 2 < dev <= 8:
