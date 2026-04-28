@@ -66,13 +66,12 @@ def load_scada(file):
 
 df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
-# FIXED CALENDAR FILTER
-st.sidebar.subheader(" Select Date Range")
+# DATE FILTER
+st.sidebar.subheader("Select Date Range")
 
 min_date = df[time_col].min().date()
 max_date = df[time_col].max().date()
 
-# DATE RANGE PICKER (this is the correct way)
 date_range = st.sidebar.date_input(
     "Select Date Range",
     value=(min_date, max_date),
@@ -80,20 +79,17 @@ date_range = st.sidebar.date_input(
     max_value=max_date
 )
 
-# Handle selection safely
 if len(date_range) == 2:
     start_date, end_date = date_range
 else:
     start_date = end_date = min_date
 
-# FULL DAY COVERAGE (important fix)
 start_datetime = datetime.combine(start_date, datetime.min.time())
 end_datetime = datetime.combine(end_date, datetime.max.time())
 
-# Apply filter
 df = df[(df[time_col] >= start_datetime) & (df[time_col] <= end_datetime)]
 
-st.sidebar.markdown(f"Selected Period:**\n{start_datetime} → {end_datetime}")
+st.sidebar.markdown(f"**Selected Period:**\n{start_datetime} → {end_datetime}")
 
 # LOAD REFERENCE
 @st.cache_data
@@ -161,7 +157,7 @@ def plot_graph(df_t, merged, title, dev):
     fig.update_layout(title=dict(text=f"{title} (Dev: {round(dev,2)}%)", font=dict(color=color)))
     return fig
 
-# COMMENT 
+# COMMENT
 def generate_comment(dev):
     if dev is None:
         return "Data not available"
@@ -181,25 +177,21 @@ def generate_comment(dev):
     else:
         return f"🟢 Dev: {dev}% → Normal performance"
 
-# MODE HANDLING 
+# MODE
 turbines = df["Name"].unique()
 
 if mode == "Single Turbine":
-    selected = st.sidebar.selectbox("Select Turbine", turbines)
-    turbines_to_show = [selected]
-
+    turbines_to_show = [st.sidebar.selectbox("Select Turbine", turbines)]
 elif mode == "Compare Turbines":
-    selected = st.sidebar.multiselect("Select Turbines", turbines)
-    turbines_to_show = selected if selected else []
+    turbines_to_show = st.sidebar.multiselect("Select Turbines", turbines)
 else:
     turbines_to_show = turbines
 
-# DISPLAY 
+# DISPLAY
 cols = st.columns(2)
-i = 0
 results = []
 
-for t in turbines_to_show:
+for i, t in enumerate(turbines_to_show):
     res = process_turbine(t)
     if not res:
         continue
@@ -219,38 +211,27 @@ for t in turbines_to_show:
         "Reason": generate_comment(dev)
     })
 
-    i += 1
-
 # TABLE
 st.subheader("Turbine Ranking")
 
-results_df = pd.DataFrame(results)
-results_df = results_df.sort_values(by="Deviation_%", ascending=False, na_position='last')
+results_df = pd.DataFrame(results).sort_values(by="Deviation_%", ascending=False)
 
-st.markdown(" Worst Performing Turbines")
+st.markdown("### Worst Performing Turbines")
 st.table(results_df.sort_values(by="Deviation_%").head(5)[["Turbine","Deviation_%","Status"]])
 
-# COLOR
+# COLOR FIX
 def color_row(row):
     if row["Status"] == "Normal":
         return ['background-color: #ccffcc'] * len(row)
-    elif row["Status"] == "Slight Over":
-        return ['background-color: #66ff66'] * len(row)
-    elif row["Status"] == "High Over":
-        return ['background-color: #009933'] * len(row)
-    elif row["Status"] == "Under":
-        return ['background-color: #ffcc66'] * len(row)
-    elif row["Status"] == "High Under":
-        return ['background-color: #ff6666'] * len(row)
     else:
-        return ['background-color: #cccccc'] * len(row)
+        return ['background-color: #ffcccc'] * len(row)
 
-st.dataframe(results_df.style.apply(color_row, axis=1), use_container_width=True)
+st.write(results_df.style.apply(color_row, axis=1))
 
 # DOWNLOAD
 st.download_button(
-    label="Download Report (CSV)",
-    data = results_df.to_csv(index=False).encode('utf-8'),
-    file_name='turbine_report.csv',
-    mime='text/csv'
+    "Download Report (CSV)",
+    results_df.to_csv(index=False).encode('utf-8'),
+    "turbine_report.csv",
+    "text/csv"
 )
