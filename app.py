@@ -66,15 +66,15 @@ def load_scada(file):
 
 df, wind_col, power_col, time_col = load_scada(uploaded_file)
 
-# ----------------- ✅ NEW CALENDAR FILTER -----------------
-st.sidebar.markdown("### Select Date Range")
+# NEW CALENDAR FILTER 
+st.sidebar.markdown("Select Date Range")
 
 min_date = df[time_col].min()
 max_date = df[time_col].max()
 
 start_date = st.sidebar.date_input(
     "Start Date",
-    value=max_date - timedelta(days=15),
+    value=max_date - timedelta(days=31),
     min_value=min_date,
     max_value=max_date
 )
@@ -88,11 +88,11 @@ end_date = st.sidebar.date_input(
 
 # Convert to datetime
 start_date = pd.to_datetime(start_date)
-end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)  # include full day
+end_date = pd.to_datetime(end_date) + pd.Timedelta(days=1)
 
 # Apply filter
 df = df[(df[time_col] >= start_date) & (df[time_col] <= end_date)]
-# ---------------------------------------------------------
+
 
 # LOAD REFERENCE
 @st.cache_data
